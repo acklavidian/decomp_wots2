@@ -130,6 +130,7 @@ target_include_directories(wip PUBLIC include)
 add_library(native STATIC
     src/native/guest.cpp
     src/native/archive.cpp
+    src/native/launcher.cpp
     src/native/sprites.cpp
     src/native/model.cpp
     src/native/hle.cpp
@@ -143,6 +144,16 @@ add_library(native STATIC
 )
 target_include_directories(native PUBLIC include)
 target_link_libraries(native PRIVATE hal)
+
+# The launcher unpacks disc images (.iso, or archives holding one) with libarchive.
+find_package(LibArchive QUIET)
+if(LibArchive_FOUND)
+    target_compile_definitions(native PRIVATE WOTS2_LIBARCHIVE)
+    target_include_directories(native PRIVATE ${LibArchive_INCLUDE_DIRS})
+    target_link_libraries(native PUBLIC ${LibArchive_LIBRARIES})
+else()
+    message(STATUS "libarchive not found: wots2 will not unpack disc images (install libarchive-dev)")
+endif()
 
 # ── Main executable ───────────────────────────────────────────────────────────
 add_executable(wots2 src/main.cpp)

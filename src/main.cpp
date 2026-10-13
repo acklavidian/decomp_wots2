@@ -9,6 +9,7 @@
 #include "native/archive.h"
 #include "native/guest.h"
 #include "native/hle.h"
+#include "native/launcher.h"
 #include "native/model.h"
 #include "native/mods.h"
 
@@ -24,14 +25,15 @@ static void shutdown() {
 }
 
 int main(int argc, char* argv[]) {
-    // Directory holding the files from the game disc (SLUS_208.93, VOLUME.DAT, …).
-    std::string root = (argc > 1) ? argv[1] : "extracted";
+    // Directory holding the files from the game disc (SLUS_208.93, VOLUME.DAT, …):
+    // given, found, or unpacked from a disc image first (the launcher).
+    std::string root = launcher::locate(argc, argv);
 
     // Map PS2 RAM and load the game's data into it before anything else
     // allocates in the low address range.
     if (!guest::init((root + "/SLUS_208.93").c_str()) ||
         !archive::open((root + "/VOLUME.DAT").c_str())) {
-        fprintf(stderr, "usage: wots2 [directory with the extracted disc files]\n");
+        fprintf(stderr, "usage: wots2 [directory with the disc's files | disc image | archive]\n");
         return 1;
     }
     hle::bind_all();

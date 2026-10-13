@@ -1,0 +1,55 @@
+# Builds the downloadable packages.  Run by hand (Actions → Release → Run
+# workflow) it only builds; pushing a tag "v…" also publishes them as a release.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libsdl2-dev libgl-dev libarchive-dev
+      - name: Build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          ninja -C build
+      - name: Package
+        run: |
+          d=wots2-linux-x86_64
+          mkdir -p $d/mods
+          cp build/wots2 $d/
+          strip $d/wots2
+          for m in widescreen resolution fps_unlock; do
+            mkdir $d/mods/$m
+            cp mods/$m/mod.ini mods/$m/$m.so $d/mods/$m/
+          done
+          cp mods/README.md $d/mods/
+          cp packaging/README-linux.txt $d/README.txt
+          tar czf $d.tar.gz $d
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wots2-linux-x86_64
+          path: wots2-linux-x86_64.tar.gz
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: "wots2-*"
+          generate_release_notes: true

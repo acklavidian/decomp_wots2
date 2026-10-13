@@ -58,17 +58,19 @@ from the disc is in this repository.
 
 ```bash
 # 1. Dependencies (Debian / Ubuntu / Pop!_OS)
-sudo apt install build-essential cmake ninja-build libsdl2-dev libgl-dev ffmpeg p7zip-full
+sudo apt install build-essential cmake ninja-build libsdl2-dev libgl-dev libarchive-dev ffmpeg
 
-# 2. The disc's files go in extracted/
-7z x "Way of the Samurai 2.iso" -oextracted
-
-# 3. Build
+# 2. Build
 cmake -B build -G Ninja && ninja -C build
 
-# 4. Go
-./build/wots2 extracted
+# 3. Go — hand it your disc image the first time
+./build/wots2 "Way of the Samurai 2.iso"
 ```
+
+The launcher unpacks the game's files once (into `extracted/`, about 1.5 GB) and
+starts the game; after that plain `./build/wots2` is enough. It takes an `.iso`,
+or a `.zip` / `.7z` / `.rar` / `.tar.*` holding the image or the files
+themselves. Start it without an argument and it asks for the file in a window.
 
 `ffmpeg` is only needed for the movies. F11 toggles fullscreen. Saves go in
 `wots2_card/`.

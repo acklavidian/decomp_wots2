@@ -29,3 +29,5 @@ extracted_vol/
 # Local project notes
 CLAUDE.md
 .claude/
+extracted.partial/
+extracted.image

@@ -5,7 +5,7 @@ set -e
 
 echo "=== Installing system dependencies ==="
 sudo apt-get install -y \
-    libsdl2-dev \
+    libsdl2-dev libarchive-dev \
     radare2 \
     ninja-build \
     binutils-mipsel-linux-gnu \
