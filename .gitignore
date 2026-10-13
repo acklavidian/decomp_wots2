@@ -1,0 +1,31 @@
+# Large game files - tracked by LFS or excluded
+*.iso
+assets/
+
+# Build output
+build/
+
+# Ghidra project files
+*.gpr
+*.rep/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Ghidra project (regenerate with tools/ghidra_decomp.sh --import)
+ghidra_project/
+wots2.sav
+wots2_card/
+
+# Mods: built libraries
+mods/*/*.so
+
+# The game disc and its contents (copyrighted: never commit)
+extracted/
+extracted_vol/
+
+# Local project notes
+CLAUDE.md
+.claude/
