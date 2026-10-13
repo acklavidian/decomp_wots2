@@ -62,6 +62,14 @@ float* Quat_Slerp(float t, float q[4], const float to[4]) {
         memcpy(q, target, sizeof(target));      // as the original: the end value, whatever t is
         return q;
     }
+    // Native: two all-but-equal rotations can give a dot a hair over 1 (or an
+    // angle whose sine is 0).  The PS2's FPU has no NaN, so the original gets
+    // away with it; here the NaN would stay in the bone for good (it took a
+    // character's jaw off).  Such a pair counts as equal.
+    if (dot > 1.0f || sinf(acosf(dot)) == 0.0f) {
+        memcpy(q, target, sizeof(target));
+        return q;
+    }
     const float angle = acosf(dot);
     const float scale = 1.0f / sinf(angle);
     const float from = scale * sinf(angle * (1.0f - t));
