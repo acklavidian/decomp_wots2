@@ -2,6 +2,7 @@
 #include "hal/gs.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
+#include "hal/gl_loader.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -689,6 +690,12 @@ void init(int width, int height, const char* title) {
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
 
     s_gl_ctx = SDL_GL_CreateContext(s_window);
+    if (s_gl_ctx == nullptr || !wots2_gl_load()) {
+        fprintf(stderr, "[gs] no OpenGL 3.3: %s\n", SDL_GetError());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Way of the Samurai 2",
+                                 "This needs a graphics driver with OpenGL 3.3.", nullptr);
+        exit(1);
+    }
     apply_window();
 
     GLuint vs = compile(GL_VERTEX_SHADER, kVertexShader);

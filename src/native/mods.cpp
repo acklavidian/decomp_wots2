@@ -19,7 +19,24 @@
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
+#ifdef _WIN32
+#include <windows.h>
+static void* dlopen(const char* path, int) { return LoadLibraryA(path); }
+static void* dlsym(void* library, const char* name) {
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(library), name));
+}
+static const char* dlerror() { return "the library could not be loaded"; }
+#define RTLD_NOW 0
+#define RTLD_LOCAL 0
+#define WOTS2_MOD_SUFFIX ".dll"
+#else
 #include <dlfcn.h>
+#ifdef __APPLE__
+#define WOTS2_MOD_SUFFIX ".dylib"
+#else
+#define WOTS2_MOD_SUFFIX ".so"
+#endif
+#endif
 #include <map>
 #include <string>
 #include <sys/stat.h>
@@ -164,7 +181,7 @@ void load_mod(const std::string& root, const std::string& id) {
         archive::add_overlay((dir + "/files").c_str());
         parts++;
     }
-    const std::string library = dir + "/" + get("mod.library", id + ".so");
+    const std::string library = dir + "/" + get("mod.library", id + WOTS2_MOD_SUFFIX);
     if (is_file(library)) {
         mod->library = dlopen(library.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (mod->library == nullptr) {

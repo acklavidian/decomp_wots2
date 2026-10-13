@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # The decompiled code reads guest memory through casts of every kind.
 add_compile_options(-fno-strict-aliasing)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if(WIN32)
+    # A PS2 kernel call the game's code names shares its name with a Windows one.
+    add_compile_definitions(GetThreadId=Ps2_GetThreadId)
+endif()
 
 find_package(SDL2 QUIET)
 if(NOT SDL2_FOUND)
@@ -157,7 +161,18 @@ endif()
 
 # ── Main executable ───────────────────────────────────────────────────────────
 add_executable(wots2 src/main.cpp)
-target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal SDL2::SDL2main ${CMAKE_DL_LIBS})
+if(WIN32)
+    # Everything but SDL2 (and libarchive's own libraries) linked in; the
+    # program has a plain main, so SDL's WinMain shim is not wanted.
+    target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal
+        opengl32 comdlg32 -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+elseif(APPLE)
+    # The game's memory sits at its PS2 addresses, from 1 MB up: the zero page
+    # must end below that (by default it covers the first 4 GB).
+    target_link_libraries(wots2 PRIVATE game native game native hal -Wl,-pagezero_size,0x10000)
+else()
+    target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal SDL2::SDL2main ${CMAKE_DL_LIBS})
+endif()
 
 # ── Mods (mods/<name>/<name>.cpp → mods/<name>/<name>.so, beside its mod.ini) ──
 # Each is built against include/mod/wots2_mod.h alone.

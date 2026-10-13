@@ -31,3 +31,6 @@ CLAUDE.md
 .claude/
 extracted.partial/
 extracted.image
+mods/*/*.dll
+mods/*/*.dylib
+build-*/

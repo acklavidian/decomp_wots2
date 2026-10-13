@@ -1,6 +1,10 @@
 #include "native/guest.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/mman.h>
+#endif
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -41,8 +45,15 @@ Block* next_block(Block* b) {
 
 bool map_fixed(u32 base, u32 size) {
     void* want = guest::ptr(base);
+#ifdef _WIN32
+    void* got = VirtualAlloc(want, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+#ifndef MAP_FIXED_NOREPLACE             // (macOS: a hint, checked below)
+#define MAP_FIXED_NOREPLACE 0
+#endif
     void* got = mmap(want, size, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+#endif
     if (got != want) {
         fprintf(stderr, "[guest] cannot map %#x bytes at %#x\n", size, base);
         return false;

@@ -23,10 +23,15 @@
 #include <string>
 #include <vector>
 
-#include <dirent.h>
-#include <sys/stat.h>
-#include <sys/statvfs.h>
+#include <filesystem>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <commdlg.h>
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 
 #ifdef WOTS2_LIBARCHIVE
 #include <archive.h>
@@ -41,42 +46,24 @@ const char* const kExecutable = "SLUS_208.93";
 // What of the disc the game reads (the rest is firmware and 100 MB of padding).
 const char* const kWanted[] = {"SLUS_208.93", "VOLUME.DAT", "SYSTEM.CNF", "BGM", "MOVIE", "MODULES"};
 
+namespace fs = std::filesystem;
+
 bool is_dir(const std::string& p) {
-    struct stat st;
-    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+    std::error_code ec;
+    return fs::is_directory(p, ec);
 }
 bool is_file(const std::string& p) {
-    struct stat st;
-    return stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+    std::error_code ec;
+    return fs::is_regular_file(p, ec);
 }
-
 void remove_tree(const std::string& path) {
-    if (DIR* d = opendir(path.c_str())) {
-        while (dirent* e = readdir(d)) {
-            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
-                continue;
-            const std::string child = path + "/" + e->d_name;
-            struct stat st;
-            if (lstat(child.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
-                remove_tree(child);
-            else
-                unlink(child.c_str());
-        }
-        closedir(d);
-        rmdir(path.c_str());
-    } else {
-        unlink(path.c_str());
-    }
+    std::error_code ec;
+    fs::remove_all(path, ec);
 }
-
 bool make_dirs(const std::string& path) {
-    for (size_t i = 1; i <= path.size(); i++)
-        if (i == path.size() || path[i] == '/') {
-            const std::string part = path.substr(0, i);
-            if (mkdir(part.c_str(), 0755) != 0 && errno != EEXIST)
-                return false;
-        }
-    return true;
+    std::error_code ec;
+    fs::create_directories(path, ec);
+    return is_dir(path);
 }
 
 #ifdef WOTS2_LIBARCHIVE
@@ -208,13 +195,14 @@ bool unpack(const std::string& path, const std::function<std::string(const char*
 }
 
 bool enough_room(const std::string& near, int64_t bytes, std::string* error) {
-    struct statvfs vfs;
-    std::string dir = near;
-    const size_t slash = dir.rfind('/');
-    dir = slash == std::string::npos ? "." : dir.substr(0, slash == 0 ? 1 : slash);
-    if (statvfs(dir.c_str(), &vfs) != 0)
+    std::error_code ec;
+    fs::path dir = fs::path(near).parent_path();
+    if (dir.empty())
+        dir = ".";
+    const fs::space_info space = fs::space(dir, ec);
+    if (ec)
         return true;
-    const int64_t room = (int64_t)vfs.f_bavail * (int64_t)vfs.f_frsize;
+    const int64_t room = (int64_t)space.available;
     if (room >= bytes + (64 << 20))
         return true;
     char text[160];
@@ -291,7 +279,7 @@ bool extract_level(const std::string& source, const std::string& out, int depth,
                      image->size, "Unpacking the disc image", from, share * 0.5, progress, error);
     if (ok)
         ok = extract_level(temp, out, depth + 1, from + share * 0.5, share * 0.5, progress, error);
-    unlink(temp.c_str());
+    remove_tree(temp);
     return ok;
 }
 #endif  // WOTS2_LIBARCHIVE
@@ -355,21 +343,41 @@ struct Window {
 
 // The desktop's own file chooser, if there is one.  → false if there is none.
 bool choose_file(std::string* out) {
-    const char* commands[] = {
-        "zenity --file-selection --title='Way of the Samurai 2: choose your disc image' "
-        "--file-filter='Disc images and archives | *.iso *.ISO *.img *.IMG *.bin *.BIN *.zip *.ZIP *.7z *.7Z "
-        "*.rar *.RAR *.gz *.xz *.zst *.tar' --file-filter='All files | *' 2>/dev/null",
-        "kdialog --title 'Way of the Samurai 2: choose your disc image' --getopenfilename . "
-        "'Disc images and archives (*.iso *.img *.bin *.zip *.7z *.rar *.gz *.xz *.zst *.tar);;All files (*)' "
-        "2>/dev/null",
+    out->clear();
+#ifdef _WIN32
+    char file[MAX_PATH * 4] = "";
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof ofn;
+    ofn.lpstrTitle = "Way of the Samurai 2: choose your disc image";
+    ofn.lpstrFilter = "Disc images and archives\0*.iso;*.img;*.bin;*.zip;*.7z;*.rar;*.gz;*.xz;*.zst;*.tar\0All files\0*.*\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = sizeof file;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_HIDEREADONLY;
+    if (GetOpenFileNameA(&ofn))
+        *out = file;
+    return true;
+#else
+    struct Chooser { const char* program; const char* command; };
+    const Chooser choosers[] = {
+#ifdef __APPLE__
+        {"osascript",
+         "osascript -e 'POSIX path of (choose file with prompt \"Way of the Samurai 2: choose your disc image\")' "
+         "2>/dev/null"},
+#endif
+        {"zenity",
+         "zenity --file-selection --title='Way of the Samurai 2: choose your disc image' "
+         "--file-filter='Disc images and archives | *.iso *.ISO *.img *.IMG *.bin *.BIN *.zip *.ZIP *.7z *.7Z "
+         "*.rar *.RAR *.gz *.xz *.zst *.tar' --file-filter='All files | *' 2>/dev/null"},
+        {"kdialog",
+         "kdialog --title 'Way of the Samurai 2: choose your disc image' --getopenfilename . "
+         "'Disc images and archives (*.iso *.img *.bin *.zip *.7z *.rar *.gz *.xz *.zst *.tar);;All files (*)' "
+         "2>/dev/null"},
     };
-    const char* programs[] = {"zenity", "kdialog"};
-    for (int i = 0; i < 2; i++) {
-        const std::string probe = std::string("command -v ") + programs[i] + " >/dev/null 2>&1";
+    for (const Chooser& c : choosers) {
+        const std::string probe = std::string("command -v ") + c.program + " >/dev/null 2>&1";
         if (system(probe.c_str()) != 0)
             continue;
-        out->clear();
-        if (FILE* p = popen(commands[i], "r")) {
+        if (FILE* p = popen(c.command, "r")) {
             char line[4096];
             if (fgets(line, sizeof line, p) != nullptr) {
                 *out = line;
@@ -381,6 +389,7 @@ bool choose_file(std::string* out) {
         return true;
     }
     return false;
+#endif
 }
 
 // Unpacks `source` behind a progress window (or with lines on the terminal
@@ -433,9 +442,9 @@ bool extract_shown(const std::string& source, const std::string& dest, bool inte
     exit(code);
 }
 
-// Asks for the disc image until one could be unpacked.  Does not come back
-// without the game.
-void ask_and_extract(const std::string& dest) {
+// Asks for the disc image until one could be unpacked.  → the directory with
+// the game's files; does not come back without them.
+std::string ask_and_extract(const std::string& dest) {
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
         usage(1);
     const SDL_MessageBoxButtonData buttons[] = {
@@ -474,13 +483,10 @@ void ask_and_extract(const std::string& dest) {
         }
         if (file.empty())
             continue;                           // the chooser was cancelled
-        if (is_dir(file) && has_game(file)) {
-            // (A folder that already holds the files was dropped.)
-            if (symlink(file.c_str(), dest.c_str()) == 0)
-                return;
-        }
+        if (is_dir(file) && has_game(file))
+            return file;                        // (a folder that already holds the files was dropped)
         if (extract_shown(file, dest, true))
-            return;
+            return dest;
     }
 }
 
@@ -512,8 +518,10 @@ bool extract(const std::string& source, const std::string& dest, const Progress&
         ok = false;
     }
     if (ok) {
-        if (is_dir(dest) && !has_game(dest))
-            rmdir(dest.c_str());                // an empty leftover
+        if (is_dir(dest) && !has_game(dest)) {
+            std::error_code ec;
+            fs::remove(dest, ec);               // an empty leftover
+        }
         if (rename(partial.c_str(), dest.c_str()) != 0) {
             *error = "cannot move the files to " + dest + ": " + strerror(errno);
             ok = false;
@@ -531,8 +539,9 @@ bool extract(const std::string& source, const std::string& dest, const Progress&
 }
 
 std::string locate(int argc, char* argv[]) {
+    SDL_SetMainReady();
     const char* data = getenv("WOTS2_DATA");
-    const std::string dest = data && *data ? data : "extracted";
+    std::string dest = data && *data ? data : "extracted";
 
     if (argc > 1) {
         const std::string given = argv[1];
@@ -558,15 +567,32 @@ std::string locate(int argc, char* argv[]) {
             fprintf(stderr, "[launcher] the game's files are not in %s\n", dest.c_str());
             usage(1);
         }
-        ask_and_extract(dest);
+        dest = ask_and_extract(dest);
     }
 
     // Start afresh with the directory: the game maps its memory at fixed low
     // addresses and wants to be first there.
     SDL_Quit();
-    char* const again[] = {argv[0], const_cast<char*>(dest.c_str()), nullptr};
-    execv("/proc/self/exe", again);
-    return dest;                                // (exec failed: carry on in this process)
+#ifdef _WIN32
+    char self[MAX_PATH * 4];
+    if (GetModuleFileNameA(nullptr, self, sizeof self) != 0) {
+        const std::string quoted = "\"" + dest + "\"";
+        const intptr_t code = _spawnl(_P_WAIT, self, "wots2", quoted.c_str(), nullptr);
+        if (code != -1)
+            exit((int)code);
+    }
+#elif defined(__APPLE__)
+    {
+        char* const again[] = {argv[0], const_cast<char*>(dest.c_str()), nullptr};
+        execv(argv[0], again);
+    }
+#else
+    {
+        char* const again[] = {argv[0], const_cast<char*>(dest.c_str()), nullptr};
+        execv("/proc/self/exe", again);
+    }
+#endif
+    return dest;                                // (it could not be started again: carry on in this process)
 }
 
 }  // namespace launcher

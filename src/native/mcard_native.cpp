@@ -25,6 +25,13 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
+#define WOTS2_NULL_FILE "NUL"
+#else
+#define WOTS2_NULL_FILE "/dev/null"
+#endif
 
 namespace mc {
 
@@ -105,7 +112,7 @@ int open(int, const char* path, int mode) {
     const bool writing = (mode & 0x202) != 0;
     if (Hidden() && writing) {
         // (kept off the disc: reads and writes then go nowhere)
-        sFile = fopen("/dev/null", "r+b");
+        sFile = fopen(WOTS2_NULL_FILE, "r+b");
     } else if (Hidden()) {
         sFile = nullptr;
     } else if (mode & 0x200) {

@@ -171,14 +171,21 @@ extern "C" int Movie_Play(const char* path) {
         return 0;
     }
     const int w = hal::gs::screen_width(), h = hal::gs::screen_height();
+    char command[1024];
+#ifdef _WIN32
+    snprintf(command, sizeof command,
+             "ffmpeg -v quiet -nostdin -i \"%s\" -an -vf scale=%d:%d -r 30 -pix_fmt rgba -f rawvideo - 2>NUL",
+             file.c_str(), w, h);
+    FILE* video = _popen(command, "rb");
+#else
     std::string quoted;
     for (char c : file)
         quoted += c == '\'' ? std::string("'\\''") : std::string(1, c);
-    char command[1024];
     snprintf(command, sizeof command,
              "ffmpeg -v quiet -nostdin -i '%s' -an -vf scale=%d:%d -r 30 -pix_fmt rgba -f rawvideo - 2>/dev/null",
              quoted.c_str(), w, h);
     FILE* video = popen(command, "r");
+#endif
     std::vector<u8> frame((size_t)w * h * 4);
     const char* why = "";
     if (!video || !ReadFrame(video, frame, &why)) {
