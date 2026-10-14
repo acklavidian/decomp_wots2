@@ -25,6 +25,7 @@
 #include "native/editor_hooks.h"
 #include "native/archive.h"
 #include "native/guest.h"
+#include "native/mods.h"
 #include "game/map_collision.h"
 #include "hal/gs.h"
 #include "hal/pad.h"
@@ -39,6 +40,8 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -76,6 +79,8 @@ enum Mode { kObjects, kCells, kPoints };
 
 bool sReady = false;        // ImGui set up
 bool sOpen = false;
+bool sLightOpen = false;    // the lighting panel (F5)
+std::string sLightSaved;    // what the last save said
 bool sPause = true;
 int  sMode = kObjects;
 std::string sStatus;
@@ -1024,12 +1029,159 @@ void draw_panel() {
     ImGui::End();
 }
 
-void overlay() {
-    if (!sOpen)
+// ── The lighting panel (F5): the modern lighting's settings, live ─────────
+// The game goes on underneath; Save writes them into the lighting mod's
+// mod.ini, so they are what the next start uses.
+const char* const kQuality[] = {"low", "high", "ultra"};
+const int kQualitySize[] = {1024, 2048, 4096};
+
+int quality_of(int size) { return size <= 1024 ? 0 : size <= 2048 ? 1 : 2; }
+
+// Writes `values` into the [settings] of an ini, keeping its comments and
+// order; keys it does not have yet go at the end of that section.
+bool save_settings(const std::string& path, const std::vector<std::pair<std::string, std::string>>& values) {
+    std::ifstream in(path);
+    if (!in)
+        return false;
+    std::vector<std::string> lines;
+    for (std::string line; std::getline(in, line);)
+        lines.push_back(line);
+    in.close();
+    std::vector<bool> done(values.size(), false);
+    std::string section;
+    int settingsEnd = -1;
+    for (size_t i = 0; i < lines.size(); i++) {
+        std::string t = lines[i];
+        t.erase(0, t.find_first_not_of(" \t"));
+        if (!t.empty() && t[0] == '[') {
+            section = t.substr(1, t.find(']') - 1);
+            continue;
+        }
+        if (section != "settings" || t.empty() || t[0] == ';' || t[0] == '#')
+            continue;
+        settingsEnd = (int)i;
+        const size_t eq = t.find('=');
+        if (eq == std::string::npos)
+            continue;
+        std::string key = t.substr(0, eq);
+        key.erase(key.find_last_not_of(" \t") + 1);
+        for (size_t k = 0; k < values.size(); k++)
+            if (values[k].first == key) {
+                lines[i] = key + " = " + values[k].second;
+                done[k] = true;
+            }
+    }
+    std::vector<std::string> extra;
+    for (size_t k = 0; k < values.size(); k++)
+        if (!done[k])
+            extra.push_back(values[k].first + " = " + values[k].second);
+    if (!extra.empty()) {
+        if (settingsEnd < 0) {
+            lines.push_back("[settings]");
+            settingsEnd = (int)lines.size() - 1;
+        }
+        lines.insert(lines.begin() + settingsEnd + 1, extra.begin(), extra.end());
+    }
+    std::ofstream out(path, std::ios::trunc);
+    for (const std::string& line : lines)
+        out << line << "\n";
+    return (bool)out;
+}
+
+std::string num(float v) {
+    char buf[32];
+    snprintf(buf, sizeof buf, "%.3g", v);
+    return buf;
+}
+
+void lighting_panel() {
+    hal::gs::Lighting l = hal::gs::lighting();
+    const hal::gs::Lighting before = l;
+    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Modern lighting (F5)", &sLightOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::End();
         return;
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
+    }
+    bool on = !hal::gs::lighting_held();
+    if (ImGui::Checkbox("On (F3)", &on))
+        hal::gs::toggle_lighting();
+    ImGui::TextDisabled("Changes show at once, in the world.");
+
+    if (ImGui::CollapsingHeader("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Sun shadows", &l.shadows);
+        ImGui::Checkbox("The map casts them too (carts, eaves, trees)", &l.mapShadows);
+        ImGui::SliderFloat("Strength##shadow", &l.shadowStrength, 0.0f, 1.0f);
+        int q = quality_of(l.shadowSize);
+        if (ImGui::Combo("Quality", &q, kQuality, 3))
+            l.shadowSize = kQualitySize[q];
+    }
+    if (ImGui::CollapsingHeader("Bump mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Strength##bump", &l.bump, 0.0f, 3.0f, l.bump > 0.0f ? "%.2f" : "off");
+        ImGui::SliderFloat("Depth", &l.bumpDepth, 0.5f, 12.0f);
+    }
+    if (ImGui::CollapsingHeader("Wind and dust", ImGuiTreeNodeFlags_DefaultOpen))
+        ImGui::SliderFloat("Dust", &l.dust, 0.0f, 3.0f, l.dust > 0.0f ? "%.2f" : "off");
+    if (ImGui::CollapsingHeader("Ambient occlusion", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("On##ao", &l.ao);
+        ImGui::SliderFloat("Strength##ao", &l.aoStrength, 0.0f, 2.0f);
+        ImGui::SliderFloat("Radius", &l.aoRadius, 0.05f, 1.0f);
+    }
+    if (ImGui::CollapsingHeader("Lanterns")) {
+        ImGui::Checkbox("Lanterns light the ground", &l.lanterns);
+        ImGui::SliderFloat("Strength##lantern", &l.lanternStrength, 0.0f, 3.0f);
+    }
+    if (ImGui::CollapsingHeader("Bloom and grade", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Bloom", &l.bloom, 0.0f, 1.5f, l.bloom > 0.0f ? "%.2f" : "off");
+        ImGui::SliderFloat("Bloom threshold", &l.bloomThreshold, 0.3f, 1.0f);
+        ImGui::Checkbox("Grade", &l.grade);
+        ImGui::SliderFloat("Contrast", &l.contrast, 0.0f, 1.0f);
+        ImGui::SliderFloat("Saturation", &l.saturation, 0.0f, 2.0f);
+        ImGui::SliderFloat("Warmth", &l.warmth, -1.0f, 1.0f);
+        ImGui::SliderFloat("Vignette", &l.vignette, 0.0f, 1.0f);
+    }
+    if (memcmp(&l, &before, sizeof l) != 0)
+        hal::gs::set_lighting(l);
+
+    ImGui::Separator();
+    const std::string dir = mods::dir_of("lighting");
+    if (dir.empty()) {
+        ImGui::TextWrapped("The lighting mod is not loaded, so there is nowhere to save to.");
+    } else {
+        if (ImGui::Button("Save")) {
+            const std::vector<std::pair<std::string, std::string>> values = {
+                {"shadows", l.shadows ? "1" : "0"},
+                {"map_shadows", l.mapShadows ? "1" : "0"},
+                {"shadow_strength", num(l.shadowStrength)},
+                {"shadow_quality", kQuality[quality_of(l.shadowSize)]},
+                {"bump", num(l.bump)},
+                {"bump_depth", num(l.bumpDepth)},
+                {"dust", num(l.dust)},
+                {"ao", l.ao ? "1" : "0"},
+                {"ao_strength", num(l.aoStrength)},
+                {"ao_radius", num(l.aoRadius)},
+                {"lanterns", l.lanterns ? "1" : "0"},
+                {"lantern_strength", num(l.lanternStrength)},
+                {"bloom", num(l.bloom)},
+                {"bloom_threshold", num(l.bloomThreshold)},
+                {"grade", l.grade ? "1" : "0"},
+                {"contrast", num(l.contrast)},
+                {"saturation", num(l.saturation)},
+                {"warmth", num(l.warmth)},
+                {"vignette", num(l.vignette)},
+            };
+            const std::string path = dir + "/mod.ini";
+            sLightSaved = save_settings(path, values) ? "Saved to " + path : "Could not write " + path;
+            printf("[lighting] %s\n", sLightSaved.c_str());
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("into the lighting mod's mod.ini");
+        if (!sLightSaved.empty())
+            ImGui::TextWrapped("%s", sLightSaved.c_str());
+    }
+    ImGui::End();
+}
+
+void editor_panels() {
     if (Editor_CurrentMap(&sMap)) {
         if (sMap.index != sLevel.map || sMap.collisionFile != sLevel.colFile)
             load_level();
@@ -1044,8 +1196,49 @@ void overlay() {
         ImGui::Text("No map is loaded.");
         ImGui::End();
     }
+}
+
+void close_lighting();
+
+void overlay() {
+    if (!sOpen && !sLightOpen)
+        return;
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+    ImGui::NewFrame();
+    if (sOpen)
+        editor_panels();
+    if (sLightOpen)
+        lighting_panel();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    if (!sLightOpen && !sOpen)          // (closed with its window's ×)
+        close_lighting();
+}
+
+void ensure_imgui() {
+    if (sReady)
+        return;
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    ImGui::StyleColorsDark();
+    ImGui::GetStyle().Alpha = 0.95f;
+    ImGui_ImplSDL2_InitForOpenGL(hal::gs::window(), hal::gs::gl_context());
+    ImGui_ImplOpenGL3_Init("#version 330 core");
+    sReady = true;
+}
+
+void open_lighting() {
+    ensure_imgui();
+    sLightOpen = true;
+    hal::gs::set_overlay(overlay);
+    SDL_ShowCursor(SDL_ENABLE);
+}
+void close_lighting() {
+    sLightOpen = false;
+    if (!sOpen)
+        hal::gs::set_overlay(nullptr);
 }
 
 void open_editor() {
@@ -1054,16 +1247,7 @@ void open_editor() {
         printf("[editor] F2: there is no map to edit here (walk into the world first)\n");
         return;
     }
-    if (!sReady) {
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ImGui::GetIO().IniFilename = nullptr;
-        ImGui::StyleColorsDark();
-        ImGui::GetStyle().Alpha = 0.95f;
-        ImGui_ImplSDL2_InitForOpenGL(hal::gs::window(), hal::gs::gl_context());
-        ImGui_ImplOpenGL3_Init("#version 330 core");
-        sReady = true;
-    }
+    ensure_imgui();
     // Start where the game's camera is.
     memcpy(sEye, map.eye, sizeof sEye);
     const float len = sqrtf(map.dir[0] * map.dir[0] + map.dir[1] * map.dir[1] + map.dir[2] * map.dir[2]);
@@ -1084,7 +1268,8 @@ void close_editor() {
     sCamSet = false;
     sDragging = false;
     hal::pad::set_blocked(false);
-    hal::gs::set_overlay(nullptr);
+    if (!sLightOpen)
+        hal::gs::set_overlay(nullptr);
     if (sLevel.iomDirty || sLevel.colDirty)
         printf("[editor] closed with edits not saved (they stay until the map is loaded again)\n");
     printf("[editor] closed\n");
@@ -1099,6 +1284,31 @@ bool event(const SDL_Event& ev) {
         if (sOpen) close_editor();
         else open_editor();
         return true;
+    }
+    if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F5) {
+        if (sLightOpen) close_lighting();
+        else open_lighting();
+        return true;
+    }
+    if (!sOpen && sLightOpen) {
+        // The lighting panel alone: the game goes on, and has whatever the
+        // panel does not want (Esc closes the panel rather than the game).
+        ImGui_ImplSDL2_ProcessEvent(&ev);
+        const ImGuiIO& io = ImGui::GetIO();
+        switch (ev.type) {
+        case SDL_KEYDOWN:
+            if (ev.key.keysym.sym == SDLK_ESCAPE) {
+                close_lighting();
+                return true;
+            }
+            return io.WantCaptureKeyboard;
+        case SDL_KEYUP: case SDL_TEXTINPUT:
+            return io.WantCaptureKeyboard;
+        case SDL_MOUSEMOTION: case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: case SDL_MOUSEWHEEL:
+            return io.WantCaptureMouse;
+        default:
+            return false;
+        }
     }
     if (!sOpen)
         return false;

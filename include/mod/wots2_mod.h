@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define WOTS2_MOD_API_VERSION 2      /* 2: get_lighting / set_lighting */
+#define WOTS2_MOD_API_VERSION 3      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust */
 
 /* What of the picture a mod may change (see include/hal/gs.h, Video). */
 typedef struct Wots2Video {
@@ -93,6 +93,18 @@ struct Wots2Api {
     /* Version 2: modern lighting. */
     void (*get_lighting)(Wots2Lighting* out);
     void (*set_lighting)(const Wots2Lighting* lighting);
+
+    /* Version 3: the map's own geometry (carts, eaves, trees…) casts the sun's
+     * shadows too, not only characters and things.  Its lighting is baked, so
+     * this darkens what it already shades. */
+    void (*set_map_shadows)(int on);
+    /* Bump mapping of the map's surfaces, their heights read from the
+     * textures' brightness: strength 0 = off (about 1 = as meant), depth how
+     * steep a step of brightness is (4). */
+    void (*set_bump)(float strength, float depth);
+    /* Wind and dust: motes in the air and dust swept up by the game's gusts;
+     * 0 = none, 1 = as meant. */
+    void (*set_dust)(float amount);
 };
 
 /* Exported by the mod.  0 = loaded; anything else: the mod is left out. */

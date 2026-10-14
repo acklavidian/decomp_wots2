@@ -20,6 +20,7 @@
 #include "game/ai_moves.h"
 #include "game/map_collision.h"
 #include "game/map_db.h"
+#include "game/chara_resources.h"
 #include "game/player_data.h"
 #include "game/spawner.h"
 #include "engine/containers.h"
@@ -300,6 +301,21 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
     float editorCam[12];
     if (Editor_Camera(editorCam, editorCam + 4, editorCam + 8))
         cam = editorCam;
+    // Debug: WOTS2_VIEW="ex,ey,ez,dx,dy,dz" draws the world from there (an F4
+    // line's camera), for screenshots of a reported spot.
+    static float fixedCam[12];
+    static const bool fixedView = [] {
+        const char* v = getenv("WOTS2_VIEW");
+        if (v == nullptr)
+            return false;
+        float* c = fixedCam;
+        const int n = sscanf(v, "%f,%f,%f,%f,%f,%f", &c[0], &c[1], &c[2], &c[4], &c[5], &c[6]);
+        c[3] = c[7] = 1.0f;
+        c[8] = 0.0f; c[9] = 1.0f; c[10] = 0.0f; c[11] = 0.0f;
+        return n == 6;
+    }();
+    if (fixedView)
+        cam = fixedCam;
     memcpy(g_view.eye, cam, sizeof g_view.eye);
     memcpy(g_view.dir, cam + 4, sizeof g_view.dir);
     const float* eye = cam;
@@ -328,6 +344,17 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
         static float lights[64 * 8];
         const int n = Lights_Gather(lights, 64);
         hal::gs::set_world(view, proj, sun.dir[0], sun.colour[0], lights, n);
+        // For the wind and dust: the game's gust (the render manager's wind,
+        // RenderMgr+0x50, set by World_Step from the gust generator) and the player.
+        const u32 renderMgr = *guest::ptr<u32>(0x2EE684u);
+        const CharaParams* player = CharaResources_GetParams(CharaResources_Get(), 0);
+        if (renderMgr != 0 && player != nullptr) {
+            const float* wind = guest::ptr<float>(renderMgr + 0x50);
+            hal::gs::set_ambience(wind, &player->matrix[12], *guest::ptr<s32>(0x2EE518u) == 1);
+            static const bool traceWind = getenv("WOTS2_TRACE_WIND") != nullptr;
+            if (traceWind)
+                printf("[wind] %.4f %.4f %.4f\n", wind[0], wind[1], wind[2]);
+        }
     }
     if (m->hasSky && !getenv("WOTS2_NO_SKY")) {
         // 0.002° a frame; no fog; behind everything (the original gives it a

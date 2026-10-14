@@ -9,5 +9,7 @@ namespace mods {
 void load_all();
 // Once for every frame of the game, before it is shown.
 void frame();
+// The directory of a loaded mod (by its directory name), or "" if none is.
+const char* dir_of(const char* id);
 
 }  // namespace mods

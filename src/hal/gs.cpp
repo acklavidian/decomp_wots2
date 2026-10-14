@@ -107,6 +107,10 @@ uniform mat4 uShadowMat;
 uniform sampler2DShadow uShadow;
 uniform vec4 uShadowParams; // strength, on, texel, share on models
 uniform int uLights;
+// Bump mapping (a prototype): the map's textures read as heights by their
+// brightness; xyz = towards the sun (its strength in w), uBump.x = strength.
+uniform vec4 uSunDir;
+uniform vec4 uBump;
 uniform vec4 uLightPos[16]; // xyz, radius
 uniform vec3 uLightCol[16];
 layout(location = 0) out vec4 oColor;
@@ -116,6 +120,39 @@ layout(location = 1) out vec4 oDist;
 // (A model is given more leeway than the map: drivers differ in how far the
 // casters' depth offset reaches, and a character darkening its own body in
 // stripes is worse than one that casts no shadow on itself.)
+// How much brighter (> 1) or darker the bumps make a pixel of the map.  The
+// map's lighting is baked into its colours, so the bumps only nudge it: the
+// light a bumped surface would get from the sun and from the sky above, over
+// what the flat one gets.  No normals on the map: the face's own comes from
+// the screen-space derivatives of its world position, its tangents from
+// those of the texture coordinates (a cotangent frame).
+float bump_light(vec2 uv) {
+    vec3 dp1 = dFdx(vWorld), dp2 = dFdy(vWorld);
+    vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
+    vec3 n = normalize(cross(dp1, dp2));
+    if (dot(n, n) < 0.5) return 1.0;
+    vec3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+    if (isinf(invmax) || isnan(invmax)) return 1.0;
+    T *= invmax;
+    B *= invmax;
+    // Height = brightness; its slope from the texels round this one.
+    vec2 texel = 1.5 / vec2(textureSize(uTex, 0));     // (one texel apart: gritty)
+    const vec3 lum = vec3(0.3, 0.59, 0.11);
+    float hl = dot(texture(uTex, uv - vec2(texel.x, 0.0)).rgb, lum);
+    float hr = dot(texture(uTex, uv + vec2(texel.x, 0.0)).rgb, lum);
+    float hd = dot(texture(uTex, uv - vec2(0.0, texel.y)).rgb, lum);
+    float hu = dot(texture(uTex, uv + vec2(0.0, texel.y)).rgb, lum);
+    vec2 slope = vec2(hr - hl, hu - hd) * uBump.y / 1.5;
+    vec3 nb = normalize(n - (T * slope.x + B * slope.y));
+    vec3 L = normalize(uSunDir.xyz);
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    float d = (max(dot(nb, L), 0.0) - max(dot(n, L), 0.0)) * uSunDir.w
+            + (dot(nb, up) - dot(n, up)) * 0.35;
+    return clamp(1.0 + d * uBump.x, 0.55, 1.45);
+}
 float in_shadow(vec3 p, float bias) {
     vec3 q = (uShadowMat * vec4(p, 1.0)).xyz * 0.5 + 0.5;
     if (q.x <= 0.0 || q.x >= 1.0 || q.y <= 0.0 || q.y >= 1.0 || q.z >= 1.0)
@@ -128,6 +165,8 @@ float in_shadow(vec3 p, float bias) {
     return (1.0 - lit / 9.0) * edge;
 }
 void main() {
+    // (Before any discard: derivatives need every pixel of the quad.)
+    float bumped = uKind == 2 && uBump.x > 0.0 ? bump_light(vUv) : 1.0;
     vec4 t = texture(uTex, vUv);
     vec4 c = t * vColor;
     if (c.a < uAlphaRef) discard;
@@ -135,6 +174,7 @@ void main() {
     else if (uCutout == 2 && t.a >= 0.5) discard;
     c = clamp(c, 0.0, 1.0);
     if (uKind >= 2) {
+        c.rgb *= bumped;
         if (uShadowParams.y > 0.5) {
             float lum = dot(c.rgb, vec3(0.3, 0.59, 0.11));
             float k = uShadowParams.x * smoothstep(0.03, 0.3, lum) * (uKind == 3 ? uShadowParams.w : 1.0);
@@ -232,6 +272,8 @@ struct Cmd {
 // modern lighting.
 struct WorldView {
     bool set = false;
+    bool ambience = false, indoors = false;
+    float wind[3] = {}, focus[3] = {};
     float view[16], proj[16], sun[3], sunColour[3];
     std::vector<float> lights;          // n × {x, y, z, radius, r, g, b, 0}
 };
@@ -241,7 +283,12 @@ struct Frame {
     std::vector<Vertex3> v3;
     std::unordered_map<u64, std::vector<u32>> index;    // draws by what they are, in order
     WorldView world;
-    void clear() { cmds.clear(); v2.clear(); v3.clear(); index.clear(); world.set = false; world.lights.clear(); }
+    int number = 0;                     // which game frame (for the dust's clock)
+    void clear() {
+        cmds.clear(); v2.clear(); v3.clear(); index.clear();
+        world.set = world.ambience = false;
+        world.lights.clear();
+    }
 };
 static Frame s_cur, s_prev;
 static std::vector<u32> s_dead;         // textures to delete once the frame has been played
@@ -377,7 +424,7 @@ static void size_frame() {
 //     pixels are blurred into a glow, and a grade is laid over the picture.
 static hal::gs::Lighting s_light;
 static bool  s_litFrame = false;        // this play: the world's lights are known
-static GLint s_uCutout = -1, s_uKind = -1, s_uShadowMat = -1, s_uShadowParams = -1, s_uLights = -1, s_uLightPos = -1, s_uLightCol = -1;
+static GLint s_uSunDir = -1, s_uBump = -1, s_uCutout = -1, s_uKind = -1, s_uShadowMat = -1, s_uShadowParams = -1, s_uLights = -1, s_uLightPos = -1, s_uLightCol = -1;
 static GLuint s_programShadow = 0, s_shadowFbo = 0, s_shadowTex = 0, s_noShadowTex = 0;
 static GLint s_uShadowMvp = -1;
 static int s_shadowAlloc = 0;
@@ -656,7 +703,8 @@ static void shadow_pass(const Frame& f, const Frame* before, float t, const floa
         else if (c.op == Op::TargetEnd) inTarget = false;
         else if (c.op == Op::Begin3D) kind = c.i;
         else if (c.op == Op::End3D) kind = 0;
-        else if (c.op == Op::Mesh && kind == (int)hal::gs::View::Model && !inTarget && c.count > 0) {
+        else if (c.op == Op::Mesh && (kind == (int)hal::gs::View::Model || (s_light.mapShadows && kind == (int)hal::gs::View::Map))
+                 && !inTarget && c.count > 0) {
             const Vertex3* v = verts3(f, c, before, t);
             glBindTexture(GL_TEXTURE_2D, c.tex);
             glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)c.count * sizeof(Vertex3)), v, GL_STREAM_DRAW);
@@ -709,6 +757,8 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
     glUniform4f(s_uShadowParams, s_light.shadowStrength * (sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun),
                 shadows ? 1.0f : 0.0f, 1.0f / (float)s_light.shadowSize, 0.6f);
     glUniformMatrix4fv(s_uShadowMat, 1, GL_FALSE, m);
+    glUniform4f(s_uSunDir, f.world.sun[0], f.world.sun[1], f.world.sun[2], sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun);
+    glUniform4f(s_uBump, s_light.bump, s_light.bumpDepth, 0.0f, 0.0f);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, shadows ? s_shadowTex : s_noShadowTex);
     glActiveTexture(GL_TEXTURE0);
@@ -745,6 +795,161 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
 }
 
 // The world is drawn: occlusion, glow and grade, through a copy.
+// ── Wind and dust (Lighting::dust) ─────────────────────────────────────────
+// The game has wind — a gust that builds and dies away every second or two
+// (World+0x80), which swings hair and cloth and drifts chimney smoke — but
+// nothing in the air shows it.  Here: motes drifting round the player, and
+// when a gust blows, dust swept along the ground with it.  Simulated as the
+// pictures are shown (so smooth at any rate), drawn after the world's 3D with
+// the map's own view (in-betweens included), depth-tested, writing nothing.
+static inline float mix(float a, float b, float t);
+static void state_3d(const float* mvp, float xscale, int kind);
+static void state_2d();
+static void overlay(bool on);
+struct Mote { float p[3], v[3], age, life, size, seed; int kind; };
+static std::vector<Mote> s_motes;
+static GLuint s_dotTex = 0;
+static double s_dustClock = -1.0;
+static u32 s_dustRand = 12345;
+static float frand(float a, float b) {
+    s_dustRand = s_dustRand * 1664525u + 1013904223u;
+    return a + (b - a) * (float)(s_dustRand >> 8) / 16777216.0f;
+}
+static void dust_pass(const Frame& f, const Frame* before, float t) {
+    const WorldView& w = f.world;
+    if (s_light.dust <= 0.0f || !w.ambience)
+        return;
+    // The map's view, as the map was drawn with it.
+    int at = -1;
+    for (size_t i = 0; i < f.cmds.size(); i++)
+        if (f.cmds[i].op == Op::Begin3D && f.cmds[i].i == (int)hal::gs::View::Map) { at = (int)i; break; }
+    if (at < 0)
+        return;
+    const Cmd& view = f.cmds[(size_t)at];
+    float m[16];
+    memcpy(m, view.f, sizeof m);
+    if (before != nullptr && view.match >= 0)
+        for (int k = 0; k < 16; k++)
+            m[k] = mix(before->cmds[(size_t)view.match].f[k], m[k], t);
+    // The clock: game frames (30 a second), with the in-between's share.
+    const double clock = (double)f.number - 1.0 + (double)t;
+    float dt = s_dustClock < 0.0 ? 0.0f : (float)((clock - s_dustClock) / 30.0);
+    s_dustClock = clock;
+    dt = dt < 0.0f ? 0.0f : dt > 0.1f ? 0.1f : dt;
+
+    // The wind: the game's gust along x (up to 0.1 × the map's wind gain).
+    const float gust = fabsf(w.wind[0]) / 0.05f;
+    const float s = gust > 2.0f ? 2.0f : gust;
+    const float dir = w.wind[0] < 0.0f ? -1.0f : 1.0f;
+    const float R = 9.0f;
+    const float* c = w.focus;
+    int motes = 0, sweeps = 0;
+    for (const Mote& p : s_motes) (p.kind == 0 ? motes : sweeps)++;
+    const int wantMotes = (int)((w.indoors ? 40.0f : 90.0f) * s_light.dust);
+    const float sweepShare = w.indoors ? 0.0f : (s - 0.25f) / 0.75f;
+    const int wantSweeps = (int)(110.0f * s_light.dust * (sweepShare < 0 ? 0 : sweepShare > 1 ? 1 : sweepShare));
+    for (; motes < wantMotes; motes++) {
+        Mote p{};
+        p.kind = 0;
+        p.p[0] = c[0] + frand(-R, R); p.p[1] = c[1] + frand(0.2f, 3.2f); p.p[2] = c[2] + frand(-R, R);
+        p.life = frand(5.0f, 9.0f);
+        p.size = frand(0.035f, 0.06f);
+        p.seed = frand(0.0f, 100.0f);
+        s_motes.push_back(p);
+    }
+    // Gust dust comes in from upwind, a few a frame.
+    int budget = (int)(dt * 60.0f * s_light.dust * (1.0f + s)) + 1;
+    for (; sweeps < wantSweeps && budget > 0; sweeps++, budget--) {
+        Mote p{};
+        p.kind = 1;
+        p.p[0] = c[0] - dir * frand(0.3f, 1.0f) * R; p.p[1] = c[1] + frand(0.0f, 0.35f); p.p[2] = c[2] + frand(-R, R);
+        const float speed = (2.5f + 3.0f * s) * frand(0.7f, 1.3f);
+        p.v[0] = dir * speed; p.v[1] = frand(0.05f, 0.25f); p.v[2] = frand(-0.4f, 0.4f);
+        p.life = frand(1.2f, 2.5f);
+        p.size = frand(0.3f, 0.8f);
+        p.seed = frand(0.0f, 100.0f);
+        s_motes.push_back(p);
+    }
+    for (Mote& p : s_motes) {
+        p.age += dt;
+        if (p.kind == 0) {
+            const float a = p.age, k = p.seed;
+            p.v[0] = dir * (0.15f + 0.8f * s) + sinf(a * 1.3f + k) * 0.08f;
+            p.v[1] = sinf(a * 0.9f + k * 2.0f) * 0.05f;
+            p.v[2] = cosf(a * 1.1f + k) * 0.08f;
+        } else {
+            const float drag = 1.0f - 0.3f * dt;
+            for (float& x : p.v) x *= drag;
+            p.size += dt * 0.25f;
+        }
+        for (int i = 0; i < 3; i++) p.p[i] += p.v[i] * dt;
+    }
+    s_motes.erase(std::remove_if(s_motes.begin(), s_motes.end(), [&](const Mote& p) {
+        const float dx = p.p[0] - c[0], dz = p.p[2] - c[2];
+        return p.age > p.life || dx * dx + dz * dz > R * R * 2.0f || fabsf(p.p[1] - c[1]) > 6.0f;
+    }), s_motes.end());
+    if (s_motes.empty())
+        return;
+
+    if (s_dotTex == 0) {        // a soft round dot
+        std::vector<u8> px(32 * 32 * 4);
+        for (int y = 0; y < 32; y++)
+            for (int x = 0; x < 32; x++) {
+                const float dx = (x + 0.5f) / 16.0f - 1.0f, dy = (y + 0.5f) / 16.0f - 1.0f;
+                const float r = sqrtf(dx * dx + dy * dy);
+                const float a = r >= 1.0f ? 0.0f : (1.0f - r) * (1.0f - r);
+                u8* q = &px[(size_t)(y * 32 + x) * 4];
+                q[0] = q[1] = q[2] = 255;
+                q[3] = (u8)(a * 255.0f);
+            }
+        glGenTextures(1, &s_dotTex);
+        set_filter(s_dotTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 32, 32, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    }
+    const float* v = w.view;
+    const float right[3] = {v[0], v[4], v[8]}, up[3] = {v[1], v[5], v[9]};
+    float eye[3];           // (translation in the last row: row-vector convention)
+    for (int k = 0; k < 3; k++)
+        eye[k] = -(v[12] * v[k * 4] + v[13] * v[k * 4 + 1] + v[14] * v[k * 4 + 2]);
+    const float lum = w.sunColour[0] * 0.3f + w.sunColour[1] * 0.59f + w.sunColour[2] * 0.11f;
+    const float light = 0.35f + 0.65f * (lum > 1.0f ? 1.0f : lum < 0.0f ? 0.0f : lum);
+    std::vector<Vertex3> q;
+    q.reserve(s_motes.size() * 6);
+    for (const Mote& p : s_motes) {
+        const float in = p.age / (p.life * 0.15f), out = (p.life - p.age) / (p.life * 0.3f);
+        float env = in < out ? in : out;
+        env = env > 1.0f ? 1.0f : env;
+        float r, g, b, a;
+        if (p.kind == 0) {
+            // Close to the eye a mote would be a snowflake: gone within 3 units.
+            const float dx = p.p[0] - eye[0], dy = p.p[1] - eye[1], dz = p.p[2] - eye[2];
+            const float closeness = (sqrtf(dx * dx + dy * dy + dz * dz) - 1.5f) / 1.5f;
+            env *= closeness < 0.0f ? 0.0f : closeness > 1.0f ? 1.0f : closeness;
+            r = 1.1f; g = 0.98f; b = 0.8f; a = 0.6f;
+        }
+        else             { r = 0.82f; g = 0.76f; b = 0.66f; a = 0.18f; }
+        r *= light; g *= light; b *= light; a *= env;
+        const float h = p.size;
+        float corner[4][3];
+        for (int k = 0; k < 3; k++) {
+            corner[0][k] = p.p[k] + (-right[k] - up[k]) * h;
+            corner[1][k] = p.p[k] + ( right[k] - up[k]) * h;
+            corner[2][k] = p.p[k] + ( right[k] + up[k]) * h;
+            corner[3][k] = p.p[k] + (-right[k] + up[k]) * h;
+        }
+        const float uv[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        for (int idx : {0, 1, 2, 0, 2, 3})
+            q.push_back({corner[idx][0], corner[idx][1], corner[idx][2], uv[idx][0], uv[idx][1], r, g, b, a});
+    }
+    state_3d(m, (float)s_width / s_lw, 0);
+    overlay(true);
+    glBindTexture(GL_TEXTURE_2D, s_dotTex);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(q.size() * sizeof(Vertex3)), q.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)q.size());
+    overlay(false);
+    state_2d();
+}
+
 static void post_pass(const Frame& f) {
     if (!(s_light.ao || s_light.bloom > 0.0f || s_light.grade))
         return;
@@ -1107,6 +1312,7 @@ static void play(const Frame& f, const Frame* before, float t) {
             break;
         case Op::Post:
             if (s_litFrame && !s_inTarget) {
+                dust_pass(f, before, t);
                 post_pass(f);
                 state_2d();
             }
@@ -1419,6 +1625,8 @@ void init(int width, int height, const char* title) {
     s_uCutout = glGetUniformLocation(s_program3d, "uCutout");
     s_uShadowMat = glGetUniformLocation(s_program3d, "uShadowMat");
     s_uShadowParams = glGetUniformLocation(s_program3d, "uShadowParams");
+    s_uSunDir = glGetUniformLocation(s_program3d, "uSunDir");
+    s_uBump = glGetUniformLocation(s_program3d, "uBump");
     s_uLights = glGetUniformLocation(s_program3d, "uLights");
     s_uLightPos = glGetUniformLocation(s_program3d, "uLightPos");
     s_uLightCol = glGetUniformLocation(s_program3d, "uLightCol");
@@ -1468,8 +1676,10 @@ void shutdown() {
 }
 
 // A new list, opening with the state the last one left.
+static int s_recNumber = 0;
 void begin_frame() {
     s_cur.clear();
+    s_cur.number = ++s_recNumber;
     memcpy(push(Op::FrameBegin).f, s_recClear, sizeof(s_recClear));
     push(Op::Blend).i = s_recBlend;
     push(Op::AlphaRef).i = s_recAlphaRef;
@@ -1884,6 +2094,7 @@ Lighting lighting() { return s_light; }
 // (Only in a frame of the world: elsewhere — the character setup's preview —
 // the game's own shadow stays.)
 bool real_shadows() { return !s_lightingHeld && s_light.shadows && s_light.shadowStrength > 0.0f && s_cur.world.set; }
+bool lighting_held() { return s_lightingHeld; }
 bool toggle_lighting() {
     s_lightingHeld = !s_lightingHeld;
     return !s_lightingHeld;
@@ -1899,6 +2110,13 @@ void set_world(const float* view, const float* proj, const float* sunDir, const 
     w.lights.assign(lights, lights + (size_t)(n > 0 ? n : 0) * 8);
 }
 void world_post() { push(Op::Post); }
+void set_ambience(const float* wind, const float* focus, bool indoors) {
+    WorldView& w = s_cur.world;
+    w.ambience = true;
+    w.indoors = indoors;
+    memcpy(w.wind, wind, sizeof w.wind);
+    memcpy(w.focus, focus, sizeof w.focus);
+}
 
 // The game's fog numbers (GsDevice_SetFogParams 0x12E9D0): the coefficient
 // runs from `clearAt` / 256 at depth `nearDepth` to `fogAt` / 256 at

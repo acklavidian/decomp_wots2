@@ -163,6 +163,26 @@ void api_set_lighting(const Wots2Lighting* in) {
     l.saturation = in->saturation;
     l.warmth = in->warmth;
     l.vignette = in->vignette;
+    l.mapShadows = hal::gs::lighting().mapShadows;      // (version 3's, set apart)
+    l.bump = hal::gs::lighting().bump;
+    l.bumpDepth = hal::gs::lighting().bumpDepth;
+    l.dust = hal::gs::lighting().dust;
+    hal::gs::set_lighting(l);
+}
+void api_set_bump(float strength, float depth) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.bump = strength > 0.0f ? strength : 0.0f;
+    l.bumpDepth = depth > 0.0f ? depth : 4.0f;
+    hal::gs::set_lighting(l);
+}
+void api_set_dust(float amount) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.dust = amount > 0.0f ? amount : 0.0f;
+    hal::gs::set_lighting(l);
+}
+void api_set_map_shadows(int on) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.mapShadows = on != 0;
     hal::gs::set_lighting(l);
 }
 void* api_guest_ptr(uint32_t address) { return guest::ptr<void>(address); }
@@ -202,7 +222,8 @@ void load_mod(const std::string& root, const std::string& id) {
         if (key.compare(0, 9, "settings.") == 0)
             mod->settings[key.substr(9)] = value;
     mod->api = {WOTS2_MOD_API_VERSION, mod->dir.c_str(), api_log, api_setting, api_get_video, api_set_video,
-                api_guest_ptr, api_hook, api_find, api_on_frame, api_pad_buttons, api_get_lighting, api_set_lighting};
+                api_guest_ptr, api_hook, api_find, api_on_frame, api_pad_buttons, api_get_lighting, api_set_lighting,
+                api_set_map_shadows, api_set_bump, api_set_dust};
 
     int parts = 0;
     if (is_dir(dir + "/files")) {
@@ -274,6 +295,13 @@ void load_all() {
 void frame() {
     for (const FrameHook& hook : sFrameHooks)
         hook.fn(hook.user);
+}
+
+const char* dir_of(const char* id) {
+    for (const Mod* mod : sMods)
+        if (mod->id == id)
+            return mod->dir.c_str();
+    return "";
 }
 
 }  // namespace mods

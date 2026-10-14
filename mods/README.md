@@ -19,7 +19,7 @@ Switch a mod off with `enabled = 0` in its `mod.ini`; change what it does under
 | `widescreen` | The 3D view opened out to the sides — the same height of view, more to the left and right. | `aspect` = `auto` (the window's shape), `16:9`, `21:9`, a number; `hud` = `edges` (gauges, enemy plates and the HUD's text keep to the picture's edges) or `center` |
 | `resolution` | Draws the picture with more lines than the PS2's 448. | `internal` = `window` (as many as the window has), a number of lines (`1080`), or `2x`, `3x`…; `window` = `1920x1080`; `fullscreen` = `1` |
 | `fps_unlock` | Shows more than thirty pictures a second. | `fps` = `display` or a number (`60`, `120`…); `vsync` = `1` / `0` |
-| `lighting` | Modern lighting in the world: the sun's shadows of characters, swords and things (in place of the dark blots under their feet), ambient occlusion, the lanterns of the night maps lighting the ground, bloom, a colour grade. | `shadows`, `ao`, `lanterns`, `grade` = `1` / `0`; `shadow_strength`, `shadow_quality` (`low`, `high`, `ultra`); `ao_strength`, `ao_radius`; `lantern_strength`; `bloom` (0 = off), `bloom_threshold`; `contrast`, `saturation`, `warmth`, `vignette` |
+| `lighting` | Modern lighting in the world: the sun's shadows of characters, swords and things (in place of the dark blots under their feet), ambient occlusion, the lanterns of the night maps lighting the ground, bloom, a colour grade. | `shadows`, `map_shadows` (the map's own carts, eaves and trees cast too), `ao`, `bump` (relief on the map's surfaces, heights from the textures' brightness: 0 off, 1, 2 strong), `bump_depth`, `dust` (motes in the air and dust swept up by the game's own gusts: 0 off, 1, 2 a dusty day), `lanterns`, `grade` = `1` / `0`; `shadow_strength`, `shadow_quality` (`low`, `high`, `ultra`); `ao_strength`, `ao_radius`; `lantern_strength`; `bloom` (0 = off), `bloom_threshold`; `contrast`, `saturation`, `warmth`, `vignette` |
 
 **F11** switches between the window and the whole screen at any time.
 
@@ -34,12 +34,18 @@ Good to know:
   were drawn as, in the middle; only the 3D world (and fades, the pause
   menu's dimming, the letterbox bars) fills the width.
 - **F3** switches the modern lighting off and on while playing, to compare.
+- **F5** opens a panel with every setting of the modern lighting: move a
+  slider and the picture changes at once (the game goes on underneath; Esc
+  or F5 closes the panel).  **Save** writes the values into
+  `mods/lighting/mod.ini`, so the next start uses them.
 - **F4** prints where you are (the map, your position, the camera) on the
   terminal — handy for reporting something that looks wrong.
 - `lighting` only touches the 3D world: menus, the character setup screen,
   story text and movies are as they were.  Its shadows come from the map's
-  own sun (at night, the moon: fainter); the map's baked lighting is kept, so
-  buildings do not cast new shadows — characters and things do.
+  own sun (at night, the moon: fainter).  Characters and things cast them, and
+  with `map_shadows` (on by default) so does the map itself — carts, eaves,
+  fences, trees; the map's baked lighting is kept underneath, so with it off
+  only characters and things cast.
 - All four only change how the finished frame is drawn.  With them off the
   picture is pixel for pixel what it was.
 
@@ -134,6 +140,7 @@ What the table gives a mod:
 | `log`, `setting` | a line on the terminal; a value from its `mod.ini` |
 | `get_video`, `set_video` | the shape, size and rate of the picture (what the first three mods above use) |
 | `get_lighting`, `set_lighting` | the modern lighting (`Wots2Lighting`; API version 2) |
+| `set_map_shadows`, `set_bump`, `set_dust` | whether the map's geometry casts the sun's shadows too; bump mapping of its surfaces; wind and dust (API version 3) |
 | `guest_ptr(address)` | the game's memory: the PS2's addresses, as `config/globals.json` gives them |
 | `on_frame(fn, user)` | a call once every frame of the game |
 | `pad_buttons(port)` | the buttons held, as the game sees them |
