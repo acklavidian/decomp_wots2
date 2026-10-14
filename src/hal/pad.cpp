@@ -30,6 +30,8 @@ static constexpr KeyMap KEY_MAP[] = {
     { SDLK_w,         hal::pad::R1       },
     { SDLK_e,         hal::pad::L2       },
     { SDLK_r,         hal::pad::R2       },
+    { SDLK_c,         hal::pad::L3       },     // (L3: sprint, with the sword away)
+    { SDLK_v,         hal::pad::R3       },     // (R3: the camera back behind)
 };
 
 // Debug aid: the left stick held at (x, y) for the next two polls.
@@ -58,7 +60,7 @@ static void load_script() {
         {"down", hal::pad::DOWN}, {"left", hal::pad::LEFT}, {"right", hal::pad::RIGHT},
         {"cross", hal::pad::CROSS}, {"circle", hal::pad::CIRCLE}, {"square", hal::pad::SQUARE},
         {"triangle", hal::pad::TRIANGLE}, {"l1", hal::pad::L1}, {"r1", hal::pad::R1},
-        {"l2", hal::pad::L2}, {"r2", hal::pad::R2},
+        {"l2", hal::pad::L2}, {"r2", hal::pad::R2}, {"l3", hal::pad::L3}, {"r3", hal::pad::R3},
     };
     std::string spec = e;
     if (spec.size() > 1 && spec[0] == '@') {            // "@file": the list is in a file (a long run's does not fit the environment)
@@ -206,15 +208,23 @@ void poll() {
     if (keys[SDL_SCANCODE_K]) s_ry[0] = 0xFF;
     // Debug: WOTS2_LSTICK="x,y" (0–255) holds the left stick somewhere.
     // ("from:x,y" only from that frame on.)
+    // ("from:x,y;from:x,y…": a step at each; the last one begun holds.)
     if (const char* fixed = getenv("WOTS2_LSTICK")) {
-        int from = 0, fx = 0x80, fy = 0x80;
-        if (strchr(fixed, ':'))
-            sscanf(fixed, "%d:%d,%d", &from, &fx, &fy);
-        else
-            sscanf(fixed, "%d,%d", &fx, &fy);
-        if (frame >= from) {
-            s_lx[0] = (u8)fx;
-            s_ly[0] = (u8)fy;
+        bool any = false;
+        int hx = 0x80, hy = 0x80;
+        for (const char* p = fixed; p && *p; ) {
+            int from = 0, fx = 0x80, fy = 0x80;
+            if (strchr(fixed, ':'))
+                sscanf(p, "%d:%d,%d", &from, &fx, &fy);
+            else
+                sscanf(p, "%d,%d", &fx, &fy);
+            if (frame >= from) { hx = fx; hy = fy; any = true; }
+            p = strchr(p, ';');
+            if (p) p++;
+        }
+        if (any) {
+            s_lx[0] = (u8)hx;
+            s_ly[0] = (u8)hy;
         }
     }
 

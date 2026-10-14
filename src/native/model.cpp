@@ -366,11 +366,16 @@ void Model::draw(const float* pose, sprites::Sheet* shared, const Lighting* ligh
                 tex = sheet->texture_for(rect);
             }
             // The run this strip joins: the last one (a moving model keeps its
-            // order of drawing), or for a map any with the same key.
+            // order of drawing), or for a map any with the same key — and in
+            // the same 16-unit square of the map, so that what is out of view
+            // can be left out (the graphics layer culls by each run's box).
             Batch* batch = nullptr;
+            const int tile = fixed && !strip.verts.empty()
+                           ? (int)floorf(strip.verts[0].p1[0] / 16.0f) * 4096 + (int)floorf(strip.verts[0].p1[2] / 16.0f)
+                           : 0;
             if (fixed) {
                 for (Batch& b : batches)
-                    if (b.tex == tex && b.bias == bias && b.overlay == (pass == 1)) {
+                    if (b.tex == tex && b.bias == bias && b.tile == tile && b.overlay == (pass == 1)) {
                         batch = &b;
                         break;
                     }
@@ -383,6 +388,7 @@ void Model::draw(const float* pose, sprites::Sheet* shared, const Lighting* ligh
                 batch = &batches.back();
                 batch->tex = tex;
                 batch->bias = bias;
+                batch->tile = tile;
                 batch->overlay = pass == 1;
             }
             hal::gs::Vtx3 window[2];        // the last two points of a strip

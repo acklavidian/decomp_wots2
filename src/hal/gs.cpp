@@ -112,7 +112,9 @@ uniform int uLights;
 uniform vec4 uSunDir;
 uniform vec4 uBump;
 // Un-baking (a prototype): the map relit instead of its painted-in light.
-// x = how much (0 baked … 1 relit), y = exposure; the map's ambient and sun.
+// x = how much (0 baked … 1 relit), y = exposure, z = how much of the sun a
+// shadow takes (the shadow strength: its default 0.55 = all); the map's
+// ambient and sun.
 uniform vec4 uUnbake;
 uniform vec3 uAmbient;
 uniform vec3 uSunCol;
@@ -194,7 +196,7 @@ void main() {
             float top = max(vColor.r, max(vColor.g, vColor.b));
             vec3 tint = vColor.rgb / max(top, 0.04);
             float ndl = max(dot(faceN, normalize(uSunDir.xyz)), 0.0);
-            vec3 light = uAmbient + uSunCol * ndl * (1.0 - sh);
+            vec3 light = uAmbient + uSunCol * ndl * (1.0 - sh * uUnbake.z);
             vec3 relit = clamp(t.rgb * tint * light * uUnbake.y, 0.0, 1.0) * bumped;
             c.rgb = mix(c.rgb, relit, uUnbake.x);
         }
@@ -284,7 +286,7 @@ struct Cmd {
     int owner = -1;                     // a mesh: its Begin3D
     int match = -1;                     // the same draw in the frame before
     u32 who = 0;                        // Begin3D / Mesh: whose view it is (begin_3d's `who`; 0 = not said)
-    float f[16] = {};
+    float f[16] = {};                   // Begin3D: its matrix; Mesh: its box, lo xyz then hi xyz
 };
 // The world's view, sun and point lights of a frame (set_world), for the
 // modern lighting.
@@ -708,6 +710,8 @@ static void shadow_matrix(const WorldView& w, float* m) {
 
 static const Vertex3* verts3(const Frame& f, const Cmd& c, const Frame* before, float t);
 
+static bool box_outside(const float* lo, const float* hi, const float* m, float xscale);
+static void mesh_box(const Cmd& c, const Frame* before, float* lo, float* hi);
 static void shadow_pass(const Frame& f, const Frame* before, float t, const float* m) {
     const int size = s_light.shadowSize;
     if (s_shadowFbo == 0) {
@@ -751,6 +755,11 @@ static void shadow_pass(const Frame& f, const Frame* before, float t, const floa
         else if (c.op == Op::End3D) kind = 0;
         else if (c.op == Op::Mesh && (kind == (int)hal::gs::View::Model || (s_light.mapShadows && kind == (int)hal::gs::View::Map))
                  && !inTarget && c.count > 0) {
+            static const bool off = getenv("WOTS2_NO_CULL") != nullptr;
+            float lo[3], hi[3];
+            mesh_box(c, before, lo, hi);
+            if (!off && lo[0] <= hi[0] && box_outside(lo, hi, m, 1.0f))
+                continue;           // (outside the shadow's box)
             const Vertex3* v = verts3(f, c, before, t);
             glBindTexture(GL_TEXTURE_2D, c.tex);
             glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)c.count * sizeof(Vertex3)), v, GL_STREAM_DRAW);
@@ -811,7 +820,8 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
         // lanterns' pools (relit, the night went flat and bright — its light
         // numbers are the day's), and interiors have no sun to speak of.
         const float share = f.world.ambience && !f.world.indoors && !f.world.night ? 1.0f : 0.0f;
-        glUniform4f(s_uUnbake, s_light.unbake * share, s_light.unbakeExposure, 0.0f, 0.0f);
+        const float block = s_light.shadowStrength / 0.55f;
+        glUniform4f(s_uUnbake, s_light.unbake * share, s_light.unbakeExposure, block > 1.0f ? 1.0f : block, 0.0f);
     }
     glUniform3fv(s_uAmbient, 1, f.world.ambient);
     glUniform3fv(s_uSunCol, 1, f.world.sunColour);
@@ -1222,7 +1232,79 @@ static void state_2d() {
 
 // Plays a frame's list into the frame buffer.  With `before` and t < 1: the
 // picture part of the way (t) from the frame before to this one.
+// ── Culling ─────────────────────────────────────────────────────────────────
+// Everything 3D is recorded whole (so the in-between pictures pair the same
+// draws whatever is in view) and culled as it is played: a mesh whose box —
+// its own, and the frame before's when it is drawn part of the way from that
+// — lies wholly outside one side of the view, or (map and models, with fog)
+// further than the fog's end, is not drawn.  The view is the one the vertex
+// shader uses, the widescreen narrowing included.  WOTS2_NO_CULL=1 draws all.
+static float s_playMvp[16], s_playXScale = 1.0f, s_playEye[3];
+static int s_playKind = 0;
+static bool s_playEyeSet = false;
+static int s_culled = 0, s_drawn = 0;
+static bool box_outside(const float* lo, const float* hi, const float* m, float xscale) {
+    int out[6] = {};
+    for (int i = 0; i < 8; i++) {
+        const float p[3] = {i & 1 ? hi[0] : lo[0], i & 2 ? hi[1] : lo[1], i & 4 ? hi[2] : lo[2]};
+        float c[4];
+        for (int j = 0; j < 4; j++)
+            c[j] = p[0] * m[j] + p[1] * m[4 + j] + p[2] * m[8 + j] + m[12 + j];
+        c[0] *= xscale;
+        out[0] += c[0] < -c[3];
+        out[1] += c[0] > c[3];
+        out[2] += c[1] < -c[3];
+        out[3] += c[1] > c[3];
+        out[4] += c[2] < -c[3];
+        out[5] += c[2] > c[3];
+    }
+    for (int k = 0; k < 6; k++)
+        if (out[k] == 8)
+            return true;
+    return false;
+}
+static void mesh_box(const Cmd& c, const Frame* before, float* lo, float* hi) {
+    memcpy(lo, c.f, 3 * sizeof(float));
+    memcpy(hi, c.f + 3, 3 * sizeof(float));
+    if (before != nullptr && c.lerp && c.match >= 0) {
+        const float* o = before->cmds[(size_t)c.match].f;
+        for (int k = 0; k < 3; k++) {
+            lo[k] = o[k] < lo[k] ? o[k] : lo[k];
+            hi[k] = o[3 + k] > hi[k] ? o[3 + k] : hi[k];
+        }
+    }
+}
+static bool culled(const Cmd& c, const Frame* before) {
+    static const bool off = getenv("WOTS2_NO_CULL") != nullptr;
+    if (off || c.count == 0)
+        return false;
+    float lo[3], hi[3];
+    mesh_box(c, before, lo, hi);
+    if (lo[0] > hi[0])
+        return false;
+    if (box_outside(lo, hi, s_playMvp, s_playXScale))
+        return true;
+    if (s_fog[3] > 0.5f && s_playEyeSet &&
+        (s_playKind == (int)hal::gs::View::Map || s_playKind == (int)hal::gs::View::Model)) {
+        float d2 = 0.0f;                // the box's nearest point to the eye
+        for (int k = 0; k < 3; k++) {
+            const float e = s_playEye[k], v = e < lo[k] ? lo[k] - e : e > hi[k] ? e - hi[k] : 0.0f;
+            d2 += v * v;
+        }
+        const float fogEnd = s_fog[2] + 2.0f;
+        if (d2 > fogEnd * fogEnd)
+            return true;
+    }
+    return false;
+}
+
 static void play(const Frame& f, const Frame* before, float t) {
+    s_playEyeSet = f.world.set;
+    if (f.world.set) {
+        const float* v = f.world.view;
+        for (int k = 0; k < 3; k++)
+            s_playEye[k] = -(v[12] * v[k * 4] + v[13] * v[k * 4 + 1] + v[14] * v[k * 4 + 2]);
+    }
     static const float kIdentity[16] = {1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
     static const float kNoFog[4] = {0, 0, 0, 0};
     const bool scaled = s_physH != s_height;
@@ -1312,10 +1394,18 @@ static void play(const Frame& f, const Frame* before, float t) {
                 for (int k = 0; k < 16; k++)
                     m[k] = mix(a[k], m[k], t);
             }
-            state_3d(m, s_inTarget ? 1.0f : (float)s_width / s_lw, c.i);
+            memcpy(s_playMvp, m, sizeof m);
+            s_playXScale = s_inTarget ? 1.0f : (float)s_width / s_lw;
+            s_playKind = c.i;
+            state_3d(m, s_playXScale, c.i);
             break;
         }
         case Op::Mesh: {
+            if (culled(c, before)) {
+                s_culled++;
+                break;
+            }
+            s_drawn++;
             const Vertex3* v = verts3(f, c, before, t);
             glBindTexture(GL_TEXTURE_2D, c.tex);
             const bool cutout = !s_overlayOn && s_cutout.count(c.tex);
@@ -1864,6 +1954,12 @@ static void parse_frame_hooks() {
         s_exitFrame = atoi(e);
 }
 static void debug_frame_hooks() {
+    static const bool traceCull = getenv("WOTS2_TRACE_CULL") != nullptr;
+    if (traceCull && s_drawn + s_culled > 0) {
+        printf("[cull] frame %d: %d meshes drawn, %d culled\n", s_frame, s_drawn, s_culled);
+        fflush(stdout);
+    }
+    s_drawn = s_culled = 0;
     if (!s_picturePath.empty()) {       // photo mode: the frame without the overlay
         const int w = s_physW, h = s_physH;
         std::vector<u8> px((size_t)w * h * 3);
@@ -2296,14 +2392,22 @@ void draw_mesh(u32 tex, const Vtx3* verts, int count, Prim prim) {
     const u32 first = (u32)s_cur.v3.size();
     s_cur.v3.resize((size_t)first + (size_t)count);
     Vertex3* out = s_cur.v3.data() + first;
+    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
     for (int i = 0; i < count; i++) {
         float c[4];
         unpack(verts[i].rgba, c, tex != 0);
         out[i] = {verts[i].x, verts[i].y, verts[i].z, verts[i].u, verts[i].v, c[0], c[1], c[2], c[3]};
+        const float p[3] = {verts[i].x, verts[i].y, verts[i].z};
+        for (int k = 0; k < 3; k++) {
+            lo[k] = p[k] < lo[k] ? p[k] : lo[k];
+            hi[k] = p[k] > hi[k] ? p[k] : hi[k];
+        }
     }
     if (!own_texture(tex))
         check_live(tex, "a 3D draw with");
     Cmd& c = push(Op::Mesh);
+    memcpy(c.f, lo, sizeof lo);
+    memcpy(c.f + 3, hi, sizeof hi);
     c.tex = tex ? tex : s_white;
     c.prim = (u8)prim;
     c.first = first;

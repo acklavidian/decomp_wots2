@@ -79,6 +79,7 @@ struct Model {
     struct Batch {
         u32 tex = 0;
         int bias = 0;
+        int tile = 0;               // a map's: which 16 × 16 square it lies in (so that it can be culled)
         bool overlay = false;
         std::vector<hal::gs::Vtx3> verts;
     };

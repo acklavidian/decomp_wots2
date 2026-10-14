@@ -208,6 +208,37 @@ static int PadMove(PadRoutine* self, const float* dir, int push) {
     return 0;
 }
 
+// Native addition (not the original's): sprinting.  L3 (the left stick
+// pressed in) switches it on while the sword is away; it plays the run
+// faster — the motion player's speed, so the legs and the ground covered keep
+// together (travel is read from the motion at its frame) — and goes off when
+// the stick is let go, the sword drawn or something picked up.
+static constexpr float kSprint = 1.5f;
+static void Sprint(CharaBody* body, u32 pressed, int push) {
+    static u32 sBody = 0;               // the body sped up, and its speed before
+    static float sSpeed = 1.0f;
+    static bool sOn = false;
+    if (pressed & kPadL3)
+        sOn = !sOn;
+    if (push == 0 || (body->flags & (kBodyArmed | kBodyCarrying)) != 0)
+        sOn = false;
+    MotionPlayer* player = P<MotionPlayer>(body->player);
+    const bool sprint = sOn && (body->flags & kBodyInAir) == 0 && (body->actionFlags & kActfRun) != 0 &&
+                        player != nullptr;
+    const u32 me = guest::addr(body);
+    if (sprint && sBody != me) {
+        sBody = me;
+        sSpeed = player->speed;
+        player->speed = sSpeed * kSprint;
+    } else if (sprint) {
+        player->speed = sSpeed * kSprint;       // (a new motion of the run keeps it)
+    } else if (sBody == me) {
+        if (player != nullptr)
+            player->speed = sSpeed;
+        sBody = 0;
+    }
+}
+
 // 0x1C7260
 static u32 PadRoutine_Step(PadRoutine* self) {
     const u32 held = Pad_GetHeld(P(self->pad), self->port);
@@ -232,6 +263,7 @@ static u32 PadRoutine_Step(PadRoutine* self) {
     if (push == 0)
         push = StickDirection(self, dir);
     PadCommands_Push(P(self->commands), dir);
+    Sprint(body, pressed, push);
 
     // Forward or back against a blow in progress is remembered (parries).
     u32 lean = 0;

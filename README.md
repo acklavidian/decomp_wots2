@@ -95,13 +95,14 @@ themselves. Start it without an argument and it asks for the file in a window.
 | | Controller | Keyboard |
 |---|---|---|
 | Run / walk | Left stick or d-pad | Arrows / T G F H |
+| Sprint (sword away) | Press L3 while running (off when you let go of the stick) | C |
 | Jump, confirm | Cross (bottom) | Z |
 | Talk | Circle (right) | X |
 | Attack, pick up | Square (left) | A |
 | Attack, cancel | Triangle (top) | S |
 | Draw / sheathe | L1 | Q |
 | Guard (+ Square: kick) | R1 | W |
-| Camera | Right stick | J L / I K |
+| Camera | Right stick (R3: back behind) | J L / I K (V: back behind) |
 | Pause menu | Start | Enter |
 
 ## How it works
