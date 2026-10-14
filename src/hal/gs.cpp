@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 #include <cstring>
+#include <algorithm>
 
 // ── How a frame gets to the screen ─────────────────────────────────────────
 // The game draws in immediate mode into a 640 × 448 frame, thirty times a
@@ -43,6 +44,8 @@ static GLuint s_program = 0, s_vao = 0, s_vbo = 0, s_white = 0;
 static GLuint s_lastFbo = 0, s_lastTex = 0;   // the frame shown last (the PS2's other buffer): read_frame
 static GLuint s_fbo = 0, s_fboTex = 0;   // the frame the game's draws are played into
 static GLuint s_grabTex = 0;
+static GLuint s_distTex = 0;            // the frame's second colour buffer, distances (R32F): the modern lighting's
+static int    s_distW = 0, s_distH = 0;
 static int    s_allocW = 0, s_allocH = 0, s_grabW = 0, s_grabH = 0;
 static GLint  s_uScreen = -1, s_uAlphaRef = -1, s_uDepth = -1, s_uXoff = -1, s_uUvRect = -1;
 static const u32 kNoZ = 0xFFFFFFFFu;
@@ -89,15 +92,62 @@ static const char* kFragmentShader3d = R"(#version 330 core
 in vec2 vUv;
 in vec4 vColor;
 in float vDepth;
+in vec3 vWorld;
 uniform sampler2D uTex;
 uniform float uAlphaRef;
 uniform vec4 uFog;          // A, B, far distance, on
 uniform vec3 uFogColor;
-out vec4 oColor;
+// Modern lighting (hal::gs::Lighting): 0 none, 2 the map, 3 a model.
+uniform int uKind;
+// A cut-out texture in the pass that writes depth: 1 = the filtered alpha
+// only says where it is cut, and what is left is drawn opaque; 2 = then only
+// the soft fringe outside that, blended, writing no depth.
+uniform int uCutout;
+uniform mat4 uShadowMat;
+uniform sampler2DShadow uShadow;
+uniform vec4 uShadowParams; // strength, on, texel, share on models
+uniform int uLights;
+uniform vec4 uLightPos[16]; // xyz, radius
+uniform vec3 uLightCol[16];
+layout(location = 0) out vec4 oColor;
+// (While the modern lighting's occlusion is on: the distance from the eye,
+// which — unlike the depth buffer — no depth bias has moved.)
+layout(location = 1) out vec4 oDist;
+// (A model is given more leeway than the map: drivers differ in how far the
+// casters' depth offset reaches, and a character darkening its own body in
+// stripes is worse than one that casts no shadow on itself.)
+float in_shadow(vec3 p, float bias) {
+    vec3 q = (uShadowMat * vec4(p, 1.0)).xyz * 0.5 + 0.5;
+    if (q.x <= 0.0 || q.x >= 1.0 || q.y <= 0.0 || q.y >= 1.0 || q.z >= 1.0)
+        return 0.0;
+    float edge = clamp(min(min(q.x, 1.0 - q.x), min(q.y, 1.0 - q.y)) * 12.0, 0.0, 1.0);
+    float lit = 0.0;
+    for (int i = -1; i <= 1; i++)
+        for (int j = -1; j <= 1; j++)
+            lit += texture(uShadow, vec3(q.xy + vec2(i, j) * uShadowParams.z, q.z - bias));
+    return (1.0 - lit / 9.0) * edge;
+}
 void main() {
-    vec4 c = texture(uTex, vUv) * vColor;
+    vec4 t = texture(uTex, vUv);
+    vec4 c = t * vColor;
     if (c.a < uAlphaRef) discard;
+    if (uCutout == 1) c.a = vColor.a;
+    else if (uCutout == 2 && t.a >= 0.5) discard;
     c = clamp(c, 0.0, 1.0);
+    if (uKind >= 2) {
+        if (uShadowParams.y > 0.5) {
+            float lum = dot(c.rgb, vec3(0.3, 0.59, 0.11));
+            float k = uShadowParams.x * smoothstep(0.03, 0.3, lum) * (uKind == 3 ? uShadowParams.w : 1.0);
+            c.rgb *= 1.0 - k * in_shadow(vWorld, uKind == 3 ? 0.004 : 0.0008);
+        }
+        if (uKind == 2)
+            for (int i = 0; i < uLights; i++) {
+                vec3 d = vWorld - uLightPos[i].xyz;
+                float a = clamp(1.0 - dot(d, d) / (uLightPos[i].w * uLightPos[i].w), 0.0, 1.0);
+                c.rgb += t.rgb * uLightCol[i] * a * a;
+            }
+        c.rgb = clamp(c.rgb, 0.0, 1.0);
+    }
     if (uFog.w > 0.5) {
         if (vDepth > uFog.z) discard;
         float clear = clamp(uFog.x + uFog.y / max(vDepth, 0.001), 0.0, 1.0);
@@ -105,6 +155,7 @@ void main() {
         c.a *= clamp((uFog.z - vDepth) / 4.0, 0.0, 1.0) > 0.0 ? 1.0 : 0.0;
     }
     oColor = c;
+    oDist = vec4(vDepth);
 }
 )";
 
@@ -123,9 +174,11 @@ uniform float uXScale;      // a wider picture: the same view, more of it to the
 out vec2 vUv;
 out vec4 vColor;
 out float vDepth;
+out vec3 vWorld;
 void main() {
     vUv = aUv;
     vColor = aColor;
+    vWorld = aPos;
     gl_Position = uMvp * vec4(aPos, 1.0);
     vDepth = gl_Position.w;             // distance in front of the viewer
     gl_Position.x *= uXScale;
@@ -162,7 +215,7 @@ static void unpack(u32 rgba, float out[4], bool textured = true) {
 
 // ── The recorded frame ─────────────────────────────────────────────────────
 enum class Op : u8 { FrameBegin, Clear, Blend, AlphaRef, Draw2D, DrawDepth, Begin3D, End3D, Mesh,
-                     Fog, Bias, Overlay, Grab, TargetBegin, TargetEnd };
+                     Fog, Bias, Overlay, Grab, TargetBegin, TargetEnd, Post };
 enum : u8 { kHasZ = 1, kUvRect = 2, kFrameTex = 4, kSpan = 8 };
 struct Cmd {
     Op  op;
@@ -172,17 +225,44 @@ struct Cmd {
     int count = 0, i = 0;
     int owner = -1;                     // a mesh: its Begin3D
     int match = -1;                     // the same draw in the frame before
+    u32 who = 0;                        // Begin3D / Mesh: whose view it is (begin_3d's `who`; 0 = not said)
     float f[16] = {};
+};
+// The world's view, sun and point lights of a frame (set_world), for the
+// modern lighting.
+struct WorldView {
+    bool set = false;
+    float view[16], proj[16], sun[3], sunColour[3];
+    std::vector<float> lights;          // n × {x, y, z, radius, r, g, b, 0}
 };
 struct Frame {
     std::vector<Cmd> cmds;
     std::vector<Vertex> v2;
     std::vector<Vertex3> v3;
     std::unordered_map<u64, std::vector<u32>> index;    // draws by what they are, in order
-    void clear() { cmds.clear(); v2.clear(); v3.clear(); index.clear(); }
+    WorldView world;
+    void clear() { cmds.clear(); v2.clear(); v3.clear(); index.clear(); world.set = false; world.lights.clear(); }
 };
 static Frame s_cur, s_prev;
 static std::vector<u32> s_dead;         // textures to delete once the frame has been played
+// The textures handed out and not yet given back.  A texture given back twice
+// would delete whatever has been made under its number since (GL reuses
+// them) — a map's wall, say, drawn black from then on; and a draw with one
+// given back draws black.  Both are refused and told once.
+static std::set<u32> s_live;
+// Textures whose every texel is either clear or opaque (grass, leaves,
+// fences).  Drawn with smooth filtering their edges come out part clear; blended
+// there while writing depth, an edge took the colour of whatever had been drawn
+// before it — often the clear colour, the fence behind not yet drawn — and
+// kept it, since what lay behind could no longer draw there: a pale outline
+// round every blade of grass (user's report, the magistrate's yard).
+static std::set<u32> s_cutout;
+static bool s_overlayOn = false;
+static void check_live(u32 tex, const char* what) {
+    static std::set<u32> told;
+    if (tex != 0 && !s_live.count(tex) && told.insert(tex).second)
+        fprintf(stderr, "[GS] %s texture %u, which was given back (frame %d)\n", what, tex, s_frame);
+}
 
 // What the recording side knows of the state that outlives a frame (a list
 // starts by putting it back, so that it can be played twice).
@@ -192,6 +272,7 @@ static float s_recFog[4] = {0, 0, 0, 0}, s_recFogColor[3] = {0, 0, 0}, s_recFogB
 static u32   s_recZ = kNoZ;
 static bool  s_recWide = false;
 static int   s_recOwner = -1;
+static u32   s_recWho = 0;
 
 static GLuint s_targetFbo = 0, s_targetTex = 0, s_targetDepth = 0;
 static int s_targetSize = 0;
@@ -264,14 +345,493 @@ static void size_frame() {
     s_physH = s_allocH = h;
     glBindTexture(GL_TEXTURE_2D, s_fboTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glBindRenderbuffer(GL_RENDERBUFFER, s_depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    glBindTexture(GL_TEXTURE_2D, s_depth);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    if (s_distTex != 0) {
+        s_distW = w;
+        s_distH = h;
+        glBindTexture(GL_TEXTURE_2D, s_distTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0, GL_RED, GL_FLOAT, nullptr);
+    }
     if (s_lastTex != 0) {
         glBindTexture(GL_TEXTURE_2D, s_lastTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     }
     if (s_frame > 0)
         printf("[GS] frame %d x %d (%.0f x %d of the game's pixels)\n", w, h, s_lw, s_height);
+}
+
+// ── Modern lighting (hal::gs::Lighting) ──────────────────────────────────
+// None of it is the PS2's.  It is played on top of the recorded frame, and
+// only in a frame that says where the world's camera, sun and lights are
+// (set_world, from the map's draw):
+//   - before the list is played, everything drawn as a Model (characters,
+//     swords, objects) is drawn once more, depth only, as seen from the sun:
+//     a shadow map over the middle of the view.  The map and the models then
+//     look it up per pixel and darken where it is in shadow — less where the
+//     baked lighting has made them dark already;
+//   - the map's point lights add a pool of light round them on the map;
+//   - when the world is drawn (world_post), ambient occlusion is worked out
+//     from the depth buffer (normals from the depths round a pixel, twelve
+//     samples in a disc: McGuire's "scalable ambient obscurance"), bright
+//     pixels are blurred into a glow, and a grade is laid over the picture.
+static hal::gs::Lighting s_light;
+static bool  s_litFrame = false;        // this play: the world's lights are known
+static GLint s_uCutout = -1, s_uKind = -1, s_uShadowMat = -1, s_uShadowParams = -1, s_uLights = -1, s_uLightPos = -1, s_uLightCol = -1;
+static GLuint s_programShadow = 0, s_shadowFbo = 0, s_shadowTex = 0, s_noShadowTex = 0;
+static GLint s_uShadowMvp = -1;
+static int s_shadowAlloc = 0;
+static GLuint s_emptyVao = 0, s_pAo = 0, s_pBright = 0, s_pBlur = 0, s_pComp = 0;
+static GLuint s_postFbo = 0, s_postTex = 0, s_aoFbo = 0, s_aoTex = 0, s_bloomFbo[2] = {}, s_bloomTex[2] = {};
+static int s_postW = 0, s_postH = 0;
+static bool s_writeDist = false;        // this play: 3D views of the world write it
+static bool s_viewDist = false;         // the 3D view being played writes distances
+static void dist_buffers(bool on) {
+    static const GLenum both[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    if (s_writeDist && !s_inTarget)
+        glDrawBuffers(on ? 2 : 1, both);
+}
+
+static const char* kShadowVs = R"(#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUv;
+uniform mat4 uMvp;
+out vec2 vUv;
+void main() { vUv = aUv; gl_Position = uMvp * vec4(aPos, 1.0); }
+)";
+static const char* kShadowFs = R"(#version 330 core
+in vec2 vUv;
+uniform sampler2D uTex;
+void main() { if (texture(uTex, vUv).a < 0.5) discard; }
+)";
+static const char* kScreenVs = R"(#version 330 core
+out vec2 vUv;
+void main() {
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vUv = p;
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+// (Depth → distance: the depth buffer holds (ndc + 1) / 2 of a projection
+// whose clip z = z·A + B and clip w = −z.)
+static const char* kAoFs = R"(#version 330 core
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uDistT;   // distance from the eye (huge: nothing of the world)
+uniform vec4 uProj;         // proj[0], proj[5]
+uniform float uXScale;
+uniform vec3 uAo;           // radius, strength, the frame's height in pixels
+uniform vec2 uTexel;        // a pixel of the frame
+float dist(vec2 uv) { return texture(uDistT, uv).r; }
+vec3 at(vec2 uv, float z) { return vec3((uv.x * 2.0 - 1.0) / uXScale * z / uProj.x, (uv.y * 2.0 - 1.0) * z / uProj.y, -z); }
+vec3 view(vec2 uv) { return at(uv, dist(uv)); }
+void main() {
+    if (dist(vUv) > 1e8) { o = vec4(1.0); return; }
+    vec3 P = view(vUv);
+    vec3 x1 = view(vUv + vec2(uTexel.x, 0.0)) - P, x2 = P - view(vUv - vec2(uTexel.x, 0.0));
+    vec3 y1 = view(vUv + vec2(0.0, uTexel.y)) - P, y2 = P - view(vUv - vec2(0.0, uTexel.y));
+    vec3 N = normalize(cross(abs(x1.z) < abs(x2.z) ? x1 : x2, abs(y1.z) < abs(y2.z) ? y1 : y2));
+    if (dot(N, P) > 0.0) N = -N;
+    float r = uAo.x, z = -P.z;
+    float px = min(r * uProj.y / z * 0.5 * uAo.z, uAo.z * 0.1);
+    if (px < 1.5) { o = vec4(1.0); return; }
+    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    const int n = 12;
+    float sum = 0.0;
+    for (int i = 0; i < n; i++) {
+        float a = (float(i) + 0.5) / float(n);
+        float angle = a * 6.2831853 * 7.0 + noise * 6.2831853;
+        vec2 uv = vUv + vec2(cos(angle), sin(angle)) * (a * px) * uTexel;
+        float dq = dist(uv);
+        if (dq > 1e8) continue;
+        vec3 v = at(uv, dq) - P;
+        float vv = dot(v, v), vn = dot(v, N);
+        float f = max(r * r - vv, 0.0);
+        // (What lies nearly in the surface does not count.)
+        sum += f * f * f * max((vn - 0.01 * z - 0.15 * sqrt(vv)) / (vv + 0.01), 0.0);
+    }
+    // (Never all the way to black: the PS2's pictures are lit softly, and a
+    // corner that went black would look like a hole.)
+    float ao = max(0.0, 1.0 - sum * 5.0 / (pow(r, 6.0) * float(n)));
+    o = vec4(mix(1.0, max(ao, 0.35), clamp(uAo.y, 0.0, 1.0) * 0.75));
+}
+)";
+static const char* kBrightFs = R"(#version 330 core
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uColor, uDepthT;
+uniform vec2 uTexel;
+uniform float uThreshold;
+void main() {
+    // (Only what is in the world glows: the sky, at the far plane, would
+    // turn white.)
+    if (texture(uDepthT, vUv).r >= 0.9999) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    vec3 c = (texture(uColor, vUv + vec2(-0.5, -0.5) * uTexel).rgb + texture(uColor, vUv + vec2(0.5, -0.5) * uTexel).rgb +
+              texture(uColor, vUv + vec2(-0.5, 0.5) * uTexel).rgb + texture(uColor, vUv + vec2(0.5, 0.5) * uTexel).rgb) * 0.25;
+    float l = max(c.r, max(c.g, c.b));
+    o = vec4(c * smoothstep(uThreshold, uThreshold + 0.18, l), 1.0);
+}
+)";
+static const char* kBlurFs = R"(#version 330 core
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uColor;
+uniform vec2 uStep;
+void main() {
+    const float w[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    vec3 c = texture(uColor, vUv).rgb * w[0];
+    for (int i = 1; i < 5; i++)
+        c += (texture(uColor, vUv + uStep * float(i)).rgb + texture(uColor, vUv - uStep * float(i)).rgb) * w[i];
+    o = vec4(c, 1.0);
+}
+)";
+static const char* kCompFs = R"(#version 330 core
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uColor, uAoT, uBloom, uDistT;
+uniform vec2 uAoTexel;
+uniform vec4 uOn;           // ao, bloom strength, grade, the frame's width / height
+uniform vec4 uGrade;        // contrast, saturation, warmth, vignette
+void main() {
+    vec4 frame = texture(uColor, vUv);
+    vec3 c = frame.rgb;
+    float z = texture(uDistT, vUv).r;
+    if (uOn.x > 0.5 && z < 1e8) {
+        // (The occlusion was made at half size and is noisy: a blur that
+        // keeps to surfaces at about the same distance.)
+        float sum = 0.0, weight = 0.0;
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++) {
+                vec2 uv = vUv + (vec2(i, j) - 1.5) * uAoTexel;
+                float w = max(0.0, 1.0 - abs(texture(uDistT, uv).r - z) / (0.04 * z + 0.05));
+                sum += texture(uAoT, uv).r * w;
+                weight += w;
+            }
+        c *= weight > 0.001 ? sum / weight : texture(uAoT, vUv).r;
+    }
+    c += texture(uBloom, vUv).rgb * uOn.y;
+    if (uOn.z > 0.5) {
+        c = clamp(c, 0.0, 1.0);
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = mix(vec3(l), c, uGrade.y);
+        c = clamp(c, 0.0, 1.0);
+        c = mix(c, c * c * (3.0 - 2.0 * c), uGrade.x);
+        c *= vec3(1.0 + 0.08 * uGrade.z, 1.0 + 0.02 * uGrade.z, 1.0 - 0.08 * uGrade.z);
+        vec2 q = vUv - 0.5;
+        q.x *= uOn.w / 1.7778;
+        c *= 1.0 - uGrade.w * smoothstep(0.15, 0.75, dot(q, q) * 2.2);
+    }
+    o = vec4(clamp(c, 0.0, 1.0), frame.a);
+}
+)";
+
+static GLuint link(const char* vsSrc, const char* fsSrc) {
+    GLuint vs = compile(GL_VERTEX_SHADER, vsSrc), fs = compile(GL_FRAGMENT_SHADER, fsSrc);
+    GLuint p = glCreateProgram();
+    glAttachShader(p, vs);
+    glAttachShader(p, fs);
+    glLinkProgram(p);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = 0;
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(p, sizeof log, nullptr, log);
+        fprintf(stderr, "[GS] link error: %s\n", log);
+    }
+    return p;
+}
+static GLuint colour_target(GLuint& fbo, GLuint& tex, int w, int h, GLenum format) {
+    if (fbo == 0) {
+        glGenFramebuffers(1, &fbo);
+        glGenTextures(1, &tex);
+        set_filter(tex);
+    }
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, format, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    return fbo;
+}
+static bool s_lightingHeld = false;     // F3
+static bool lighting_wanted() {
+    return !s_lightingHeld && (s_light.shadows || s_light.ao || s_light.lanterns || s_light.bloom > 0.0f || s_light.grade);
+}
+static void lighting_init() {
+    if (s_programShadow != 0)
+        return;
+    s_programShadow = link(kShadowVs, kShadowFs);
+    glUseProgram(s_programShadow);
+    s_uShadowMvp = glGetUniformLocation(s_programShadow, "uMvp");
+    glUniform1i(glGetUniformLocation(s_programShadow, "uTex"), 0);
+    s_pAo = link(kScreenVs, kAoFs);
+    s_pBright = link(kScreenVs, kBrightFs);
+    s_pBlur = link(kScreenVs, kBlurFs);
+    s_pComp = link(kScreenVs, kCompFs);
+    glUseProgram(s_pComp);
+    glUniform1i(glGetUniformLocation(s_pComp, "uColor"), 0);
+    glUniform1i(glGetUniformLocation(s_pComp, "uAoT"), 1);
+    glUniform1i(glGetUniformLocation(s_pComp, "uBloom"), 2);
+    glUniform1i(glGetUniformLocation(s_pComp, "uDistT"), 3);
+    glGenVertexArrays(1, &s_emptyVao);
+    glUseProgram(s_program);
+}
+
+// The sun's view: a box `reach` each way round a point ahead of the camera,
+// `deep` along the light; its middle moves in whole texels so that the
+// shadows' edges do not crawl as the camera moves.
+static void shadow_matrix(const WorldView& w, float* m) {
+    const float* v = w.view;
+    const float ax[3] = {v[0], v[4], v[8]}, ay[3] = {v[1], v[5], v[9]}, az[3] = {v[2], v[6], v[10]};
+    float eye[3], C[3];
+    for (int k = 0; k < 3; k++)
+        eye[k] = -(v[12] * ax[k] + v[13] * ay[k] + v[14] * az[k]);
+    const float e = s_light.shadowReach, deep = 60.0f;
+    for (int k = 0; k < 3; k++)
+        C[k] = eye[k] - az[k] * e * 0.7f;
+    float L[3] = {w.sun[0], w.sun[1], w.sun[2]};
+    float len = sqrtf(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+    if (len < 0.001f) { L[0] = 0.3f; L[1] = 1.0f; L[2] = 0.2f; len = sqrtf(1.13f); }
+    for (float& x : L) x /= len;
+    if (L[1] < 0.3f) {      // never so low that the shadows run off to the horizon
+        L[1] = 0.3f;
+        len = sqrtf(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+        for (float& x : L) x /= len;
+    }
+    const float F[3] = {-L[0], -L[1], -L[2]};
+    float R[3] = {F[2], 0.0f, -F[0]};
+    len = sqrtf(R[0] * R[0] + R[2] * R[2]);
+    if (len < 0.001f) { R[0] = 1.0f; R[2] = 0.0f; len = 1.0f; }
+    for (float& x : R) x /= len;
+    const float U[3] = {F[1] * R[2] - F[2] * R[1], F[2] * R[0] - F[0] * R[2], F[0] * R[1] - F[1] * R[0]};
+    const auto dot = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    const float texel = 2.0f * e / (float)s_light.shadowSize;
+    const float cx = floorf(dot(C, R) / texel) * texel, cy = floorf(dot(C, U) / texel) * texel;
+    const float out[16] = {R[0] / e, U[0] / e, F[0] / deep, 0,  R[1] / e, U[1] / e, F[1] / deep, 0,
+                           R[2] / e, U[2] / e, F[2] / deep, 0,  -cx / e, -cy / e, -dot(C, F) / deep, 1};
+    memcpy(m, out, sizeof out);
+}
+
+static const Vertex3* verts3(const Frame& f, const Cmd& c, const Frame* before, float t);
+
+static void shadow_pass(const Frame& f, const Frame* before, float t, const float* m) {
+    const int size = s_light.shadowSize;
+    if (s_shadowFbo == 0) {
+        glGenFramebuffers(1, &s_shadowFbo);
+        glGenTextures(1, &s_shadowTex);
+    }
+    if (s_shadowAlloc != size) {
+        s_shadowAlloc = size;
+        glBindTexture(GL_TEXTURE_2D, s_shadowTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size, size, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_shadowFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_shadowTex, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s_shadowFbo);
+    glViewport(0, 0, size, size);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_BLEND);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.5f, 4.0f);
+    glUseProgram(s_programShadow);
+    glUniformMatrix4fv(s_uShadowMvp, 1, GL_FALSE, m);
+    glBindVertexArray(s_vao3d);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo3d);
+    bool inTarget = false;
+    int kind = 0;
+    for (const Cmd& c : f.cmds) {
+        if (c.op == Op::TargetBegin) inTarget = true;
+        else if (c.op == Op::TargetEnd) inTarget = false;
+        else if (c.op == Op::Begin3D) kind = c.i;
+        else if (c.op == Op::End3D) kind = 0;
+        else if (c.op == Op::Mesh && kind == (int)hal::gs::View::Model && !inTarget && c.count > 0) {
+            const Vertex3* v = verts3(f, c, before, t);
+            glBindTexture(GL_TEXTURE_2D, c.tex);
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)c.count * sizeof(Vertex3)), v, GL_STREAM_DRAW);
+            glDrawArrays(gl_prim(c.prim), 0, c.count);
+        }
+    }
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_BLEND);
+}
+
+// Before a list is played: the shadow map, and what the 3D program needs to
+// know of the world's lights.
+static void lighting_begin(const Frame& f, const Frame* before, float t) {
+    s_litFrame = f.world.set && lighting_wanted();
+    s_writeDist = false;
+    if (!s_litFrame)
+        return;
+    lighting_init();
+    if (s_light.ao) {
+        // The distance buffer: made on first use, the frame's size, beside
+        // the colour (it is cleared with the frame and written by the
+        // world's 3D views only — see dist_buffers).
+        if (s_distTex == 0) {
+            glGenTextures(1, &s_distTex);
+            glBindTexture(GL_TEXTURE_2D, s_distTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
+        if (s_distW != s_physW || s_distH != s_physH) {
+            s_distW = s_physW;
+            s_distH = s_physH;
+            glBindTexture(GL_TEXTURE_2D, s_distTex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, s_distW, s_distH, 0, GL_RED, GL_FLOAT, nullptr);
+            glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, s_distTex, 0);
+        }
+        s_writeDist = true;
+    }
+    float m[16] = {};
+    const bool shadows = s_light.shadows && s_light.shadowStrength > 0.0f;
+    if (shadows) {
+        shadow_matrix(f.world, m);
+        shadow_pass(f, before, t, m);
+    }
+    glUseProgram(s_program3d);
+    const float sun = f.world.sunColour[0] * 0.3f + f.world.sunColour[1] * 0.59f + f.world.sunColour[2] * 0.11f;
+    glUniform4f(s_uShadowParams, s_light.shadowStrength * (sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun),
+                shadows ? 1.0f : 0.0f, 1.0f / (float)s_light.shadowSize, 0.6f);
+    glUniformMatrix4fv(s_uShadowMat, 1, GL_FALSE, m);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, shadows ? s_shadowTex : s_noShadowTex);
+    glActiveTexture(GL_TEXTURE0);
+    // The sixteen point lights nearest the middle of the view.
+    int n = 0;
+    if (s_light.lanterns) {
+        const float* v = f.world.view;
+        float centre[3];
+        for (int k = 0; k < 3; k++)
+            centre[k] = -(v[12] * v[k * 4] + v[13] * v[k * 4 + 1] + v[14] * v[k * 4 + 2]) - v[k * 4 + 2] * 8.0f;
+        std::vector<std::pair<float, int>> nearest;
+        const int count = (int)(f.world.lights.size() / 8);
+        for (int i = 0; i < count; i++) {
+            const float* l = &f.world.lights[(size_t)i * 8];
+            const float d[3] = {l[0] - centre[0], l[1] - centre[1], l[2] - centre[2]};
+            nearest.push_back({d[0] * d[0] + d[1] * d[1] + d[2] * d[2], i});
+        }
+        std::sort(nearest.begin(), nearest.end());
+        float pos[16][4], col[16][3];
+        for (; n < 16 && n < (int)nearest.size(); n++) {
+            const float* l = &f.world.lights[(size_t)nearest[(size_t)n].second * 8];
+            pos[n][0] = l[0]; pos[n][1] = l[1]; pos[n][2] = l[2];
+            pos[n][3] = l[3] * s_light.lanternRadius / 5.0f;
+            for (int k = 0; k < 3; k++)
+                col[n][k] = l[4 + k] * s_light.lanternStrength;
+        }
+        if (n > 0) {
+            glUniform4fv(s_uLightPos, n, &pos[0][0]);
+            glUniform3fv(s_uLightCol, n, &col[0][0]);
+        }
+    }
+    glUniform1i(s_uLights, n);
+    glUseProgram(s_program);
+}
+
+// The world is drawn: occlusion, glow and grade, through a copy.
+static void post_pass(const Frame& f) {
+    if (!(s_light.ao || s_light.bloom > 0.0f || s_light.grade))
+        return;
+    const int W = s_physW, H = s_physH, hw = (W + 1) / 2, hh = (H + 1) / 2;
+    if (s_postW != W || s_postH != H) {
+        s_postW = W;
+        s_postH = H;
+        colour_target(s_postFbo, s_postTex, W, H, GL_RGBA8);
+        colour_target(s_aoFbo, s_aoTex, hw, hh, GL_RGBA8);
+        colour_target(s_bloomFbo[0], s_bloomTex[0], hw, hh, GL_RGBA8);
+        colour_target(s_bloomFbo[1], s_bloomTex[1], hw, hh, GL_RGBA8);
+    }
+    const float* p = f.world.proj;
+    const float proj[4] = {p[0], p[5], p[10], p[14]};
+    const float xscale = (float)s_width / s_lw;
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glBindVertexArray(s_emptyVao);
+    if (s_light.ao) {
+        glBindFramebuffer(GL_FRAMEBUFFER, s_aoFbo);
+        glViewport(0, 0, hw, hh);
+        glUseProgram(s_pAo);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, s_distTex);
+        glUniform1i(glGetUniformLocation(s_pAo, "uDistT"), 0);
+        glUniform4fv(glGetUniformLocation(s_pAo, "uProj"), 1, proj);
+        glUniform1f(glGetUniformLocation(s_pAo, "uXScale"), xscale);
+        glUniform3f(glGetUniformLocation(s_pAo, "uAo"), s_light.aoRadius, s_light.aoStrength, (float)H);
+        glUniform2f(glGetUniformLocation(s_pAo, "uTexel"), 1.0f / (float)W, 1.0f / (float)H);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    if (s_light.bloom > 0.0f) {
+        glViewport(0, 0, hw, hh);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_bloomFbo[0]);
+        glUseProgram(s_pBright);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, s_fboTex);
+        glUniform1i(glGetUniformLocation(s_pBright, "uColor"), 0);
+        glUniform1i(glGetUniformLocation(s_pBright, "uDepthT"), 1);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, s_depth);
+        glActiveTexture(GL_TEXTURE0);
+        glUniform2f(glGetUniformLocation(s_pBright, "uTexel"), 1.0f / (float)W, 1.0f / (float)H);
+        glUniform1f(glGetUniformLocation(s_pBright, "uThreshold"), s_light.bloomThreshold);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glUseProgram(s_pBlur);
+        glUniform1i(glGetUniformLocation(s_pBlur, "uColor"), 0);
+        const GLint step = glGetUniformLocation(s_pBlur, "uStep");
+        const float scale = (float)H / 448.0f;          // the same glow at any size
+        for (int pass = 0; pass < 2; pass++) {
+            const float k = (pass + 1) * scale;
+            glBindFramebuffer(GL_FRAMEBUFFER, s_bloomFbo[1]);
+            glBindTexture(GL_TEXTURE_2D, s_bloomTex[0]);
+            glUniform2f(step, k / (float)hw, 0.0f);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindFramebuffer(GL_FRAMEBUFFER, s_bloomFbo[0]);
+            glBindTexture(GL_TEXTURE_2D, s_bloomTex[1]);
+            glUniform2f(step, 0.0f, k / (float)hh);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s_postFbo);
+    glViewport(0, 0, W, H);
+    glUseProgram(s_pComp);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_fboTex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, s_aoTex);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, s_bloomTex[0]);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, s_writeDist ? s_distTex : s_depth);
+    glUniform2f(glGetUniformLocation(s_pComp, "uAoTexel"), 1.0f / (float)hw, 1.0f / (float)hh);
+    glUniform4f(glGetUniformLocation(s_pComp, "uOn"), s_light.ao ? 1.0f : 0.0f, s_light.bloom,
+                s_light.grade ? 1.0f : 0.0f, (float)W / (float)H);
+    glUniform4f(glGetUniformLocation(s_pComp, "uGrade"), s_light.contrast, s_light.saturation, s_light.warmth,
+                s_light.vignette);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, s_shadowTex != 0 ? s_shadowTex : s_noShadowTex);
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_postFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fbo);
+    glBlitFramebuffer(0, 0, W, H, 0, 0, W, H, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
+    glEnable(GL_BLEND);
 }
 
 // ── Playing a list ─────────────────────────────────────────────────────────
@@ -347,8 +907,11 @@ static const Vertex3* verts3(const Frame& f, const Cmd& c, const Frame* before, 
     return s_tmp3.data();
 }
 
-static void state_3d(const float* mvp, float xscale) {
+static void state_3d(const float* mvp, float xscale, int kind = 0) {
+    s_viewDist = kind == (int)hal::gs::View::Map || kind == (int)hal::gs::View::Model;
+    dist_buffers(s_viewDist);
     glUseProgram(s_program3d);
+    glUniform1i(s_uKind, s_litFrame && !s_inTarget ? kind : 0);
     glUniformMatrix4fv(s_uMvp, 1, GL_FALSE, mvp);  // row-major, row-vector = column-major, column-vector
     glUniform1f(s_uXScale, xscale);
     glUniform1f(s_uAlphaRef3d, 0.5f);
@@ -371,10 +934,13 @@ static void bias(int steps) {
     }
 }
 static void overlay(bool on) {
+    s_overlayOn = on;
+    dist_buffers(s_viewDist && !on);    // (a blended overlay hides nothing: no distance)
     glDepthMask(on ? GL_FALSE : GL_TRUE);
     glUniform1f(s_uAlphaRef3d, on ? 0.02f : 0.5f);
 }
 static void state_2d() {
+    s_viewDist = false;
     bias(0);
     overlay(false);
     glDisable(GL_DEPTH_TEST);
@@ -389,6 +955,7 @@ static void play(const Frame& f, const Frame* before, float t) {
     static const float kIdentity[16] = {1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
     static const float kNoFog[4] = {0, 0, 0, 0};
     const bool scaled = s_physH != s_height;
+    lighting_begin(f, before, t);
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
     glViewport(0, 0, s_physW, s_physH);
     state_2d();
@@ -403,6 +970,12 @@ static void play(const Frame& f, const Frame* before, float t) {
             glClearColor(c.f[0], c.f[1], c.f[2], c.f[3]);
             glDepthMask(GL_TRUE);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            if (s_writeDist && !s_inTarget) {
+                static const float kNothing[4] = {1e9f, 1e9f, 1e9f, 1e9f};
+                dist_buffers(true);
+                glClearBufferfv(GL_COLOR, 1, kNothing);
+                dist_buffers(false);
+            }
             break;
         case Op::Clear:
             glClearColor(c.f[0], c.f[1], c.f[2], c.f[3]);
@@ -468,18 +1041,29 @@ static void play(const Frame& f, const Frame* before, float t) {
                 for (int k = 0; k < 16; k++)
                     m[k] = mix(a[k], m[k], t);
             }
-            state_3d(m, s_inTarget ? 1.0f : (float)s_width / s_lw);
+            state_3d(m, s_inTarget ? 1.0f : (float)s_width / s_lw, c.i);
             break;
         }
         case Op::Mesh: {
             const Vertex3* v = verts3(f, c, before, t);
             glBindTexture(GL_TEXTURE_2D, c.tex);
+            const bool cutout = !s_overlayOn && s_cutout.count(c.tex);
+            glUniform1i(s_uCutout, cutout ? 1 : 0);
             if (c.tex != s_white) {     // model textures tile
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
             }
             glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)c.count * sizeof(Vertex3)), v, GL_STREAM_DRAW);
             glDrawArrays(gl_prim(c.prim), 0, c.count);
+            if (cutout) {
+                // The fringe: blended over what is there now, hiding nothing —
+                // whatever lies behind and comes later simply draws over it.
+                glUniform1i(s_uCutout, 2);
+                overlay(true);
+                glDrawArrays(gl_prim(c.prim), 0, c.count);
+                overlay(false);
+                glUniform1i(s_uCutout, 0);
+            }
             break;
         }
         case Op::End3D:
@@ -521,6 +1105,12 @@ static void play(const Frame& f, const Frame* before, float t) {
             s_fog[3] = 0.0f;
             s_inTarget = true;
             break;
+        case Op::Post:
+            if (s_litFrame && !s_inTarget) {
+                post_pass(f);
+                state_2d();
+            }
+            break;
         case Op::TargetEnd:
             s_fog[3] = s_fogBeforeTarget;
             glEnable(GL_BLEND);
@@ -534,8 +1124,13 @@ static void play(const Frame& f, const Frame* before, float t) {
 }
 
 // ── Pairing a frame's draws with those of the frame before ─────────────────
+// (A mesh is paired only with one of the same thing: two townspeople of one
+// model have meshes alike in every other way, and when they swapped places
+// in the order of drawing, the picture in between showed a ghost of one
+// halfway to the other.)
 static u64 key_of(const Cmd& c) {
-    return ((u64)c.op << 56) ^ ((u64)c.prim << 48) ^ ((u64)(u32)c.count << 20) ^ (u64)c.tex * 0x9E3779B97F4A7C15ull;
+    return ((u64)c.op << 56) ^ ((u64)c.prim << 48) ^ ((u64)(u32)c.count << 20) ^ (u64)c.tex * 0x9E3779B97F4A7C15ull ^
+           (u64)c.who * 0xC2B2AE3D27D4EB4Full;
 }
 static bool has_verts(Op op) { return op == Op::Draw2D || op == Op::DrawDepth || op == Op::Mesh; }
 static void index_frame(Frame& f) {
@@ -553,6 +1148,35 @@ static bool project(const float* m, const Vertex3& v, float* out) {
     out[1] = (v.x * m[1] + v.y * m[5] + v.z * m[9] + m[13]) / w;
     return true;
 }
+// Where the eye of a world → view matrix is (translation in the last row or
+// the last column, whichever it has), and the angle between two of them.
+static void eye_of(const float* m, float* eye) {
+    const bool rows = fabsf(m[3]) + fabsf(m[7]) + fabsf(m[11]) < 1e-6f;
+    const float t[3] = {rows ? m[12] : m[3], rows ? m[13] : m[7], rows ? m[14] : m[11]};
+    for (int j = 0; j < 3; j++)
+        eye[j] = rows ? -(t[0] * m[j * 4] + t[1] * m[j * 4 + 1] + t[2] * m[j * 4 + 2])
+                      : -(t[0] * m[j] + t[1] * m[4 + j] + t[2] * m[8 + j]);
+}
+// Did the camera cut between two world frames?  An ease or a swing of the
+// right stick moves the eye a few tenths and turns the view a few degrees in
+// a thirtieth of a second; a cut moves it metres or turns it round.
+static bool camera_cut(const WorldView& a, const WorldView& b) {
+    float ea[3], eb[3];
+    eye_of(a.view, ea);
+    eye_of(b.view, eb);
+    const float dx = ea[0] - eb[0], dy = ea[1] - eb[1], dz = ea[2] - eb[2];
+    float tr = 0.0f;                    // trace(Ra Rbᵀ) = 1 + 2 cos(angle)
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            tr += a.view[i * 4 + j] * b.view[i * 4 + j];
+    const bool cut = dx * dx + dy * dy + dz * dz > 1.5f * 1.5f || (tr - 1.0f) / 2.0f < 0.866f;     // cos 30°
+    static const bool trace = getenv("WOTS2_TRACE_PAIR") != nullptr;
+    if (trace)
+        printf("[pair] camera: eye moved %.2f, turned %.1f degrees%s\n", sqrtf(dx * dx + dy * dy + dz * dz),
+               acosf(fminf(1.0f, fmaxf(-1.0f, (tr - 1.0f) / 2.0f))) * 57.29578f, cut ? " -> CUT" : "");
+    return cut;
+}
+
 static void pair_frames(Frame& f, const Frame& p) {
     const float kJump2D = 100.0f;       // game pixels in a thirtieth of a second: further is a jump, not a move
     const float kJump3D = 0.35f;        // of half the screen
@@ -593,6 +1217,16 @@ static void pair_frames(Frame& f, const Frame& p) {
     // thing.  It moves smoothly if its meshes come out near where the frame
     // before had them; a cut of the camera or another character in its place
     // does not, and is drawn where it now is.
+    // In the world that is asked of the camera and of the world (the user
+    // found turning the camera jumpy: the map's meshes near the eye sweep
+    // across the screen as it swings round the player, and a quarter of them
+    // "jumping" had the whole map drawn without in-betweens, by fits and
+    // starts, while the characters and the sky moved smoothly): a camera cut
+    // stops every view; else the sky and the map always move, and a
+    // character or a thing only if its meshes moved less than a unit.
+    const bool world = f.world.set && p.world.set;
+    const bool cut = world && camera_cut(f.world, p.world);
+    const float kJumpWorld = 1.0f;
     for (size_t b = 0; b < f.cmds.size(); b++) {
         if (f.cmds[b].op != Op::Begin3D)
             continue;
@@ -614,10 +1248,22 @@ static void pair_frames(Frame& f, const Frame& p) {
             const Vertex3* v = f.v3.data() + c.first;
             bool ok = true, uv = true;
             const int picks[3] = {0, c.count / 2, c.count - 1};
-            for (int k = 0; k < 3 && ok; k++) {
-                float sa[2], sb[2];
-                if (project(ma, a[picks[k]], sa) && project(mb, v[picks[k]], sb))
-                    ok = fabsf(sa[0] - sb[0]) <= kJump3D && fabsf(sa[1] - sb[1]) <= kJump3D;
+            const int kind = f.cmds[b].i;
+            if (world) {
+                ok = !cut;
+                if (ok && kind != (int)hal::gs::View::Sky && kind != (int)hal::gs::View::Map)
+                    for (int k = 0; k < 3 && ok; k++) {
+                        const Vertex3& pa = a[picks[k]];
+                        const Vertex3& pb = v[picks[k]];
+                        ok = fabsf(pa.x - pb.x) <= kJumpWorld && fabsf(pa.y - pb.y) <= kJumpWorld &&
+                             fabsf(pa.z - pb.z) <= kJumpWorld;
+                    }
+            } else {
+                for (int k = 0; k < 3 && ok; k++) {
+                    float sa[2], sb[2];
+                    if (project(ma, a[picks[k]], sa) && project(mb, v[picks[k]], sb))
+                        ok = fabsf(sa[0] - sb[0]) <= kJump3D && fabsf(sa[1] - sb[1]) <= kJump3D;
+                }
             }
             for (int i = 0; i < c.count && uv; i++)
                 uv = fabsf(a[i].u - v[i].u) <= 0.5f && fabsf(a[i].v - v[i].v) <= 0.5f;
@@ -626,6 +1272,10 @@ static void pair_frames(Frame& f, const Frame& p) {
             c.lerp = ok;
             c.lerpUv = uv;
         }
+        static const bool tracePair = getenv("WOTS2_TRACE_PAIR") != nullptr;
+        if (tracePair)
+            printf("[pair] view kind %d: %d meshes, %d moved too far%s\n", f.cmds[b].i, tested, failed,
+                   tested == 0 || failed * 4 > tested ? " -> CUT" : "");
         if (tested == 0 || failed * 4 > tested) {
             for (size_t j = b + 1; j < end; j++)
                 f.cmds[j].lerp = false;
@@ -735,10 +1385,15 @@ void init(int width, int height, const char* title) {
     glGenFramebuffers(1, &s_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_fboTex, 0);
-    glGenRenderbuffers(1, &s_depth);
-    glBindRenderbuffer(GL_RENDERBUFFER, s_depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, s_depth);
+    // (The depth buffer is a texture: the modern lighting reads it.)
+    glGenTextures(1, &s_depth);
+    glBindTexture(GL_TEXTURE_2D, s_depth);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_depth, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         fprintf(stderr, "[GS] framebuffer incomplete\n");
     s_allocW = width;
@@ -760,6 +1415,31 @@ void init(int width, int height, const char* title) {
     s_uFogColor = glGetUniformLocation(s_program3d, "uFogColor");
     glUniform1i(glGetUniformLocation(s_program3d, "uTex"), 0);
     glUniform1f(s_uXScale, 1.0f);
+    s_uKind = glGetUniformLocation(s_program3d, "uKind");
+    s_uCutout = glGetUniformLocation(s_program3d, "uCutout");
+    s_uShadowMat = glGetUniformLocation(s_program3d, "uShadowMat");
+    s_uShadowParams = glGetUniformLocation(s_program3d, "uShadowParams");
+    s_uLights = glGetUniformLocation(s_program3d, "uLights");
+    s_uLightPos = glGetUniformLocation(s_program3d, "uLightPos");
+    s_uLightCol = glGetUniformLocation(s_program3d, "uLightCol");
+    glUniform1i(glGetUniformLocation(s_program3d, "uShadow"), 1);
+    glUniform1i(s_uKind, 0);
+    glUniform1i(s_uLights, 0);
+    // (Unit 1 always holds a depth texture that compares, as the shadow
+    // sampler wants, even when nothing is in shadow.)
+    {
+        const u32 one = 0xFFFFFFFFu;
+        glGenTextures(1, &s_noShadowTex);
+        glBindTexture(GL_TEXTURE_2D, s_noShadowTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 1, 1, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, &one);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, s_noShadowTex);
+        glActiveTexture(GL_TEXTURE0);
+    }
     glGenVertexArrays(1, &s_vao3d);
     glBindVertexArray(s_vao3d);
     glGenBuffers(1, &s_vbo3d);
@@ -849,6 +1529,9 @@ static void debug_frame_hooks() {
     }
 }
 
+static void (*s_overlay)() = nullptr;
+static int s_presentRect[4] = {0, 0, 640, 448};
+
 // The finished frame to the window: stretched over it as a TV would, or —
 // when a shape was asked for — at that shape with black round it.
 static void present() {
@@ -871,6 +1554,13 @@ static void present() {
         }
     }
     glBlitFramebuffer(0, s_physH, s_physW, 0, x0, y0, x1, y1, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    s_presentRect[0] = x0; s_presentRect[1] = y0; s_presentRect[2] = x1; s_presentRect[3] = y1;
+    if (s_overlay != nullptr) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, w, h);
+        s_overlay();
+        glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
+    }
     SDL_GL_SwapWindow(s_window);
 }
 
@@ -999,6 +1689,39 @@ u32 create_texture(const u8* rgba, int width, int height) {
     glGenTextures(1, &tex);
     set_filter(tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    s_live.insert(tex);
+    bool clear = false, opaque = false, between = false;
+    for (size_t i = 3; rgba && i < (size_t)width * height * 4 && !between; i += 4) {
+        clear |= rgba[i] == 0;
+        opaque |= rgba[i] == 255;
+        between |= rgba[i] != 0 && rgba[i] != 255;
+    }
+    if (clear && opaque && !between)
+        s_cutout.insert(tex);
+    return tex;
+}
+
+void set_cutout(u32 tex, bool on) {
+    if (on) s_cutout.insert(tex);
+    else s_cutout.erase(tex);
+}
+
+u32 create_texture_compressed(Compressed format, const Level* levels, int count) {
+    const GLenum gl = format == Compressed::DXT1 ? 0x83F1      // GL_COMPRESSED_RGBA_S3TC_DXT1_EXT
+                    : format == Compressed::DXT3 ? 0x83F2      // …DXT3
+                    : 0x83F3;                                  // …DXT5
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    for (int i = 0; i < count; i++)
+        glCompressedTexImage2D(GL_TEXTURE_2D, i, gl, levels[i].width, levels[i].height, 0, (GLsizei)levels[i].size,
+                               levels[i].data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, count - 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, count > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    s_live.insert(tex);
     return tex;
 }
 
@@ -1056,10 +1779,22 @@ u32 end_target() {
     return s_targetTex;
 }
 
-void destroy_texture(u32 tex) { s_dead.push_back(tex); }
+void destroy_texture(u32 tex) {
+    if (tex == 0)
+        return;
+    if (s_live.erase(tex) == 0) {
+        check_live(tex, "asked to give back again");
+        return;
+    }
+    s_cutout.erase(tex);
+    s_dead.push_back(tex);
+}
 
 // A 2D draw of `count` vertices just added to the list's pool.
+static bool own_texture(u32 tex) { return tex == s_white || tex == s_grabTex || tex == s_targetTex; }
 static Cmd& push_2d(GLuint tex, Prim prim, u32 first, int count) {
+    if (!own_texture(tex))
+        check_live(tex, "a draw with");
     Cmd& c = push(Op::Draw2D);
     c.tex = tex;
     c.prim = (u8)prim;
@@ -1130,10 +1865,40 @@ void draw_prim(u32 tex, int tex_w, int tex_h, Prim prim, const Vtx* verts, int c
     push_2d(tex ? tex : s_white, prim, first, count);
 }
 
-void begin_3d(const float* mvp) {
+void begin_3d(const float* mvp, View kind, u32 who) {
     s_recOwner = (int)s_cur.cmds.size();
-    memcpy(push(Op::Begin3D).f, mvp, 16 * sizeof(float));
+    s_recWho = who;
+    Cmd& c = push(Op::Begin3D);
+    memcpy(c.f, mvp, 16 * sizeof(float));
+    c.i = (int)kind;
+    c.who = who;
 }
+
+void set_lighting(const Lighting& lighting) {
+    s_light = lighting;
+    s_light.shadowSize = s_light.shadowSize < 256 ? 256 : s_light.shadowSize > 8192 ? 8192 : s_light.shadowSize;
+    s_light.shadowReach = s_light.shadowReach < 2.0f ? 2.0f : s_light.shadowReach;
+    s_light.aoRadius = s_light.aoRadius < 0.05f ? 0.05f : s_light.aoRadius;
+}
+Lighting lighting() { return s_light; }
+// (Only in a frame of the world: elsewhere — the character setup's preview —
+// the game's own shadow stays.)
+bool real_shadows() { return !s_lightingHeld && s_light.shadows && s_light.shadowStrength > 0.0f && s_cur.world.set; }
+bool toggle_lighting() {
+    s_lightingHeld = !s_lightingHeld;
+    return !s_lightingHeld;
+}
+void set_world(const float* view, const float* proj, const float* sunDir, const float* sunColour,
+               const float* lights, int n) {
+    WorldView& w = s_cur.world;
+    w.set = true;
+    memcpy(w.view, view, sizeof w.view);
+    memcpy(w.proj, proj, sizeof w.proj);
+    memcpy(w.sun, sunDir, sizeof w.sun);
+    memcpy(w.sunColour, sunColour, sizeof w.sunColour);
+    w.lights.assign(lights, lights + (size_t)(n > 0 ? n : 0) * 8);
+}
+void world_post() { push(Op::Post); }
 
 // The game's fog numbers (GsDevice_SetFogParams 0x12E9D0): the coefficient
 // runs from `clearAt` / 256 at depth `nearDepth` to `fogAt` / 256 at
@@ -1167,12 +1932,15 @@ void draw_mesh(u32 tex, const Vtx3* verts, int count, Prim prim) {
         unpack(verts[i].rgba, c, tex != 0);
         out[i] = {verts[i].x, verts[i].y, verts[i].z, verts[i].u, verts[i].v, c[0], c[1], c[2], c[3]};
     }
+    if (!own_texture(tex))
+        check_live(tex, "a 3D draw with");
     Cmd& c = push(Op::Mesh);
     c.tex = tex ? tex : s_white;
     c.prim = (u8)prim;
     c.first = first;
     c.count = count;
     c.owner = s_recOwner;
+    c.who = s_recWho;
 }
 
 // (Kept as the game gave them — screen positions with a depth each — and
@@ -1188,6 +1956,8 @@ void draw_prim_depth(u32 tex, int tex_w, int tex_h, Prim prim, const Vtx* verts,
         lo = verts[i].x < lo ? verts[i].x : lo;
         hi = verts[i].x > hi ? verts[i].x : hi;
     }
+    if (!own_texture(tex))
+        check_live(tex, "a world draw with");
     Cmd& c = push(Op::DrawDepth);
     c.tex = tex ? tex : s_white;
     c.prim = (u8)prim;
@@ -1203,9 +1973,16 @@ void draw_prim_depth(u32 tex, int tex_w, int tex_h, Prim prim, const Vtx* verts,
 void end_3d() {
     push(Op::End3D);
     s_recOwner = -1;
+    s_recWho = 0;
 }
 
 int frame_count()   { return s_frame;  }
+
+SDL_Window* window() { return s_window; }
+void* gl_context() { return s_gl_ctx; }
+void set_overlay(void (*draw)()) { s_overlay = draw; }
+void present_rect(int out[4]) { memcpy(out, s_presentRect, sizeof s_presentRect); }
+float clip_x_scale() { return (float)s_width / s_lw; }
 int screen_width()  { return s_width;  }
 int screen_height() { return s_height; }
 

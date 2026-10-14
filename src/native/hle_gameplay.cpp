@@ -26,6 +26,7 @@
 #include "engine/pad.h"
 #include "native/archive.h"
 #include "native/guest.h"
+#include "native/editor_hooks.h"
 #include "native/hle.h"
 #include "native/model.h"
 #include "hal/gs.h"
@@ -90,6 +91,9 @@ struct NativeMap {
     float fog[4] = {0, 0, 0, 0};
     u32  collision = 0;         // MapCollision (decompiled), in guest memory
     u32  collisionFile = 0;
+    u32  collisionSize = 0;
+    int  index = -1;            // (for the level editor)
+    std::string modelPath, collisionPath;
     // The sky: a dome that goes where the camera goes and turns very slowly
     // (Sky_Draw 0x179500; the class is 0x179470–0x179A40).
     model::Model sky;
@@ -113,6 +117,7 @@ struct View {
     int   frame = -1;           // frame the matrix below was built in
     float viewProj[16];
     float view[16];             // world → camera (x right, y up, the viewer looks down −z)
+    float eye[3], dir[3];
 } g_view;
 
 PlayerData* player() { return guest::ptr<PlayerData>(*guest::ptr<u32>(0x2EE688u)); }
@@ -134,7 +139,10 @@ void load_map(void* state, int index) {
     m->model.release();
     m->model = model::Model();
     m->loaded = false;
+    m->index = index;
     const MapInfo* info = map_info(index);
+    m->modelPath = info && info->model ? guest::ptr<const char>(info->model) : "";
+    m->collisionPath = info && info->collision ? guest::ptr<const char>(info->collision) : "";
     std::vector<u8> file;
     if (info && archive::read(guest::ptr<const char>(info->model), file) && m->model.load(file)) {
         m->loaded = true;
@@ -186,6 +194,7 @@ void load_map(void* state, int index) {
         void* copy = guest::alloc((u32)file.size());
         memcpy(copy, file.data(), file.size());
         m->collisionFile = guest::addr(copy);
+        m->collisionSize = (u32)file.size();
         MapCollision_SetFile(holder, static_cast<const s32*>(copy));
     }
     g_currentMap = m;
@@ -271,6 +280,11 @@ u32  MapState_GetMap(void* self) {
     return m ? m->collision : 0;
 }
 
+extern "C" int Lights_Gather(float* out, int max);     // point_lights.cpp
+// The world is drawn (World_Draw): the modern lighting's last part.
+extern "C" void Native_WorldPost() { hal::gs::world_post(); }
+extern "C" int Native_RealShadows() { return hal::gs::real_shadows() ? 1 : 0; }
+
 void MapState_Draw(void* self, const float*, void* stage, void*) {
     NativeMap* m = g_maps[self];
     if (!m)
@@ -280,8 +294,14 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
     // toward the clear colour.  WOTS2_NO_FOG=1 (debug) switches it off.
     static const bool noFog = getenv("WOTS2_NO_FOG") != nullptr;
     hal::gs::set_fog(!noFog && m->fog[3] > m->fog[2], m->fog[0], m->fog[1], m->fog[2], m->fog[3], m->clearColor);
-    // The view is the decompiled stage's: an eye, the way it looks, and up.
+    // The view is the decompiled stage's: an eye, the way it looks, and up —
+    // unless the level editor is flying its own camera.
     const float* cam = static_cast<const float*>(stage);
+    float editorCam[12];
+    if (Editor_Camera(editorCam, editorCam + 4, editorCam + 8))
+        cam = editorCam;
+    memcpy(g_view.eye, cam, sizeof g_view.eye);
+    memcpy(g_view.dir, cam + 4, sizeof g_view.dir);
     const float* eye = cam;
     float z[3] = {-cam[4], -cam[5], -cam[6]};
     float x[3] = {cam[9] * z[2] - cam[10] * z[1], cam[10] * z[0] - cam[8] * z[2], cam[8] * z[1] - cam[9] * z[0]};
@@ -303,6 +323,12 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
     mul(view, proj, g_view.viewProj);
     memcpy(g_view.view, view, sizeof view);
     g_view.frame = hal::gs::frame_count();
+    {   // For the modern lighting (a mod's): the view, the sun, the point lights.
+        const model::Lighting& sun = model::scene_light();
+        static float lights[64 * 8];
+        const int n = Lights_Gather(lights, 64);
+        hal::gs::set_world(view, proj, sun.dir[0], sun.colour[0], lights, n);
+    }
     if (m->hasSky && !getenv("WOTS2_NO_SKY")) {
         // 0.002° a frame; no fog; behind everything (the original gives it a
         // projection of its own with the far plane a long way off — here its
@@ -325,13 +351,13 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
         float skyViewProj[16];
         mul(view, skyProj, skyViewProj);
         hal::gs::set_fog(false);
-        hal::gs::begin_3d(skyViewProj);
+        hal::gs::begin_3d(skyViewProj, hal::gs::View::Sky);
         m->sky.draw(pose.empty() ? nullptr : pose.data(), nullptr);
         hal::gs::end_3d();
         hal::gs::set_fog(!noFog && m->fog[3] > m->fog[2], m->fog[0], m->fog[1], m->fog[2], m->fog[3], m->clearColor);
     }
     if (m->loaded) {
-        hal::gs::begin_3d(g_view.viewProj);
+        hal::gs::begin_3d(g_view.viewProj, hal::gs::View::Map);
         m->model.draw(nullptr, nullptr);
         hal::gs::end_3d();
     }
@@ -626,4 +652,22 @@ bool hle_make_sword(int type, void* out) {
 }
 void hle_carry_sword(const void* sword) {
     PlayerData_CarrySword(guest::ptr<PlayerData>(*guest::ptr<u32>(0x2EE688u)), static_cast<const Sword*>(sword));
+}
+
+// For the level editor (native/editor.cpp).
+bool Editor_CurrentMap(EditorMap* out) {
+    if (g_currentMap == nullptr || g_view.frame < 0)
+        return false;
+    NativeMap* m = g_currentMap;
+    out->index = m->index;
+    out->modelPath = m->modelPath;
+    out->collisionPath = m->collisionPath;
+    const MapCollision* holder = guest::ptr<MapCollision>(m->collision);
+    out->collision = holder->collision ? guest::ptr<void>(holder->collision) : nullptr;
+    out->collisionFile = m->collisionFile ? guest::ptr<u8>(m->collisionFile) : nullptr;
+    out->collisionSize = m->collisionSize;
+    memcpy(out->viewProj, g_view.viewProj, sizeof out->viewProj);
+    memcpy(out->eye, g_view.eye, sizeof out->eye);
+    memcpy(out->dir, g_view.dir, sizeof out->dir);
+    return true;
 }

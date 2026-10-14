@@ -11,6 +11,7 @@
 #include "hal/gs.h"
 #include "native/archive.h"
 #include "native/guest.h"
+#include "native/texture_pack.h"
 
 #include <algorithm>
 #include <cctype>
@@ -137,6 +138,33 @@ void api_set_video(const Wots2Video* in) {
     v.hudEdges = in->hud_edges != 0;
     hal::gs::set_video(v);
 }
+void api_get_lighting(Wots2Lighting* out) {
+    const hal::gs::Lighting l = hal::gs::lighting();
+    *out = {l.shadows, l.shadowStrength, l.shadowSize, l.shadowReach, l.ao, l.aoStrength, l.aoRadius,
+            l.lanterns, l.lanternStrength, l.lanternRadius, l.bloom, l.bloomThreshold,
+            l.grade, l.contrast, l.saturation, l.warmth, l.vignette};
+}
+void api_set_lighting(const Wots2Lighting* in) {
+    hal::gs::Lighting l;
+    l.shadows = in->shadows != 0;
+    l.shadowStrength = in->shadow_strength;
+    l.shadowSize = in->shadow_size;
+    l.shadowReach = in->shadow_reach;
+    l.ao = in->ao != 0;
+    l.aoStrength = in->ao_strength;
+    l.aoRadius = in->ao_radius;
+    l.lanterns = in->lanterns != 0;
+    l.lanternStrength = in->lantern_strength;
+    l.lanternRadius = in->lantern_radius;
+    l.bloom = in->bloom;
+    l.bloomThreshold = in->bloom_threshold;
+    l.grade = in->grade != 0;
+    l.contrast = in->contrast;
+    l.saturation = in->saturation;
+    l.warmth = in->warmth;
+    l.vignette = in->vignette;
+    hal::gs::set_lighting(l);
+}
 void* api_guest_ptr(uint32_t address) { return guest::ptr<void>(address); }
 void* api_find(uint32_t address) { return guest::lookup(address); }
 void* api_hook(uint32_t address, void* fn, const char* name) {
@@ -174,12 +202,24 @@ void load_mod(const std::string& root, const std::string& id) {
         if (key.compare(0, 9, "settings.") == 0)
             mod->settings[key.substr(9)] = value;
     mod->api = {WOTS2_MOD_API_VERSION, mod->dir.c_str(), api_log, api_setting, api_get_video, api_set_video,
-                api_guest_ptr, api_hook, api_find, api_on_frame, api_pad_buttons};
+                api_guest_ptr, api_hook, api_find, api_on_frame, api_pad_buttons, api_get_lighting, api_set_lighting};
 
     int parts = 0;
     if (is_dir(dir + "/files")) {
         archive::add_overlay((dir + "/files").c_str());
         parts++;
+    }
+    // A texture pack made for PCSX2: its folder of replacement .dds files
+    // here as textures/, or wherever [mod] textures = says (relative to the mod).
+    {
+        std::string textures = get("mod.textures", "textures");
+        if (!textures.empty() && textures[0] != '/' && !(textures.size() > 1 && textures[1] == ':'))
+            textures = dir + "/" + textures;
+        if (is_dir(textures)) {
+            const int n = texture_pack::add_dir(textures);
+            printf("[mods] %s: %d replacement textures\n", id.c_str(), n);
+            parts += n > 0;
+        }
     }
     const std::string library = dir + "/" + get("mod.library", id + WOTS2_MOD_SUFFIX);
     if (is_file(library)) {
@@ -201,7 +241,7 @@ void load_mod(const std::string& root, const std::string& id) {
         printf("[mods] %s: %s is not there (not built?)\n", id.c_str(), library.c_str());
     }
     if (parts == 0)
-        printf("[mods] %s: nothing to load (no library, no files/)\n", id.c_str());
+        printf("[mods] %s: nothing to load (no library, no files/, no textures/)\n", id.c_str());
     else
         printf("[mods] %s: loaded (%s)\n", id.c_str(), mod->name.c_str());
     sMods.push_back(mod);

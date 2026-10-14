@@ -171,4 +171,27 @@ int Lights_At(const float* pos, float dirs[3][4], float colours[3][4]) {
     return changed;
 }
 
+// Native, for the modern lighting (hal::gs::set_world): the lights that
+// shine now, n × {x, y, z, radius, r, g, b, 0} — the map's while they are
+// switched on, an effect's fading with its frames.
+int Lights_Gather(float* out, int max) {
+    int n = 0;
+    for (const PointLight& light : sLights) {
+        if (n >= max)
+            break;
+        const bool effect = (light.flags & 1) != 0;
+        if (!effect && (sSwitches & 1) == 0)
+            continue;
+        const float strength = (light.flags & 8) && light.total > 0 ? (float)light.left / (float)light.total : 1.0f;
+        float* o = out + (size_t)n * 8;
+        memcpy(o, light.pos, 3 * sizeof(float));
+        o[3] = effect ? 3.0f : 5.0f;
+        for (int k = 0; k < 3; k++)
+            o[4 + k] = light.colour[k] * strength;
+        o[7] = 0.0f;
+        n++;
+    }
+    return n;
+}
+
 }  // extern "C"

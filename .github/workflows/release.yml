@@ -29,7 +29,7 @@ jobs:
           mkdir -p $d/mods
           cp build/wots2 $d/
           strip $d/wots2
-          for m in widescreen resolution fps_unlock; do
+          for m in widescreen resolution fps_unlock lighting; do
             mkdir $d/mods/$m
             cp mods/$m/mod.ini mods/$m/$m.so $d/mods/$m/
           done
@@ -65,7 +65,7 @@ jobs:
           mkdir -p $d/mods
           cp build/wots2.exe $d/
           strip $d/wots2.exe
-          for m in widescreen resolution fps_unlock; do
+          for m in widescreen resolution fps_unlock lighting; do
             mkdir $d/mods/$m
             cp mods/$m/mod.ini mods/$m/$m.dll $d/mods/$m/
             strip $d/mods/$m/$m.dll

@@ -39,6 +39,7 @@ extern "C" {
     void* PadMgr_Get();                                 // 0x13A920
     void  PadMgr_Poll(void* mgr);                       // 0x13A7B0
     void  PadMgr_Reset(void* mgr);                      // 0x13A820
+    int   Native_EditorPaused();                        // native/editor.cpp
 
     void  GsDevice_BeginFrame(GsDevice* dev);           // 0x131470
     void  GsDevice_EndFrame(GsDevice* dev);             // 0x131430
@@ -224,7 +225,8 @@ int App_RenderFrame(App* app) {
                         SceneCall<int>(SceneOf(app->queuedScene), kSceneStart);
                     }
 
-                    if (!SceneCall<int>(SceneOf(app->scene), kSceneUpdate))
+                    // (Native: the level editor holds the game still.)
+                    if (!Native_EditorPaused() && !SceneCall<int>(SceneOf(app->scene), kSceneUpdate))
                         break;
                     App_RenderFrame(app);
                 }

@@ -19,8 +19,8 @@ Without it they are skipped.
 
 F11 toggles fullscreen.  Saves go in the folder "wots2_card".  What the
 program prints goes to wots2.log in this folder — attach it to bug reports.
-The three mods in "mods" (widescreen, resolution, fps unlock) are on; each has
-a mod.ini you can edit.  See mods\README.md.
+The four mods in "mods" (widescreen, resolution, fps unlock, modern lighting)
+are on; each has a mod.ini you can edit.  See mods\README.md.
 
 This build has been tested under Wine, not yet on a real Windows machine.
 Reports of how it runs are welcome.

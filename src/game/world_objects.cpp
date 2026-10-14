@@ -1586,3 +1586,54 @@ u32    WorldObject_Vtable(void* object) { return static_cast<WorldObject*>(objec
 void* Objects_DropFromTable(void* objects, int table, int tier, const float* matrix) {
     return Objects_DropContent(objects, table, tier, matrix);
 }
+
+// ── For the level editor (native/editor.cpp) — not in the game ───────────
+#include "native/editor_hooks.h"
+
+int Objects_KindCount() {
+    LoadLists();
+    return (int)sObjects.size();
+}
+bool Objects_Kind(int id, EditorObjectKind* out) {
+    const ObjectInfo* info = InfoOf(id);
+    if (info == nullptr)
+        return false;
+    out->model = info->model;
+    out->name = info->name;
+    memcpy(out->size, info->size, sizeof out->size);
+    out->type = info->type;
+    out->a = info->a;
+    out->b = info->b;
+    out->param = info->param;
+    return true;
+}
+std::string Objects_PlacementFile(int map) {
+    LoadLists();
+    if (map < 0 || (size_t)map >= sMapFiles.size())
+        return {};
+    const std::string& name = sMapFiles[(size_t)map];
+    return name.size() >= 3 && name.compare(name.size() - 3, 3, "Iom") == 0 ? name : std::string();
+}
+// The map's things made again from an edited placement file.  Effects and
+// sounds of the place (types 8 and 9) are world effects, made once when the
+// map is entered: they are left as they are and come right on the next entry.
+void Objects_ReloadPlacements(const std::vector<u8>& file) {
+    const u32 objects = *P<u32>(0x2EE738u);
+    if (objects == 0)
+        return;
+    Objects* self = P<Objects>(objects);
+    ItemDrops_Clear(self);
+    s32 count = 0;
+    if (file.size() >= 16)
+        memcpy(&count, file.data(), 4);
+    for (s32 i = 0; i < count && 16 + (size_t)(i + 1) * 0x50 <= file.size(); i++) {
+        alignas(16) float matrix[16];
+        s32 id;
+        memcpy(matrix, &file[16 + (size_t)i * 0x50], sizeof matrix);
+        memcpy(&id, &file[16 + (size_t)i * 0x50 + 0x40], 4);
+        const ObjectInfo* info = InfoOf(id);
+        if (info == nullptr || info->type == 8 || info->type == 9)
+            continue;
+        ItemDrops_Place(self, id, matrix);
+    }
+}

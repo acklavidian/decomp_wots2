@@ -170,6 +170,8 @@ void shutdown() {
     SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
 }
 
+static bool s_blocked = false;
+
 void poll() {
     if (s_scanTimer-- <= 0) {
         s_scanTimer = 60;
@@ -216,6 +218,15 @@ void poll() {
         }
     }
 
+    // Debug: WOTS2_RSTICK="from-to:x,y" holds the right stick over those frames.
+    if (const char* r = getenv("WOTS2_RSTICK")) {
+        int from = 0, to = 0, fx = 0x80, fy = 0x80;
+        if (sscanf(r, "%d-%d:%d,%d", &from, &to, &fx, &fy) == 4 && frame >= from && frame <= to) {
+            s_rx[0] = (u8)fx;
+            s_ry[0] = (u8)fy;
+        }
+    }
+
     // Debug: a stick position some hook asked for (see debug_stick).
     if (s_debugStickFrames > 0) {
         s_debugStickFrames--;
@@ -251,7 +262,14 @@ void poll() {
         if (rx != 0x80) s_rx[port] = rx;
         if (ry != 0x80) s_ry[port] = ry;
     }
+    if (s_blocked)
+        for (int port = 0; port < 2; port++) {
+            s_buttons[port] = 0xFFFF;
+            s_lx[port] = s_ly[port] = s_rx[port] = s_ry[port] = 0x80;
+        }
 }
+
+void set_blocked(bool blocked) { s_blocked = blocked; }
 
 u16 get_buttons(u32 port) { return port < 2 ? s_buttons[port] : 0xFFFF; }
 u8  get_left_x(u32 port)  { return port < 2 ? s_lx[port] : 128; }

@@ -8,6 +8,8 @@ namespace hal::pad {
 void init();
 void shutdown();
 void poll();  // call once per frame
+// While a tool takes the keyboard and mouse (the level editor): nothing pressed.
+void set_blocked(bool blocked);
 
 // Button bits (matches PS2 pad button byte layout)
 enum Button : u16 {

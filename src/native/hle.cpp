@@ -13,6 +13,7 @@
 #include "engine/font.h"
 #include "native/archive.h"
 #include "native/guest.h"
+#include "native/editor.h"
 #include "native/sprites.h"
 #include "engine/model.h"
 #include "engine/pad.h"
@@ -461,6 +462,8 @@ void PadMgr_Init(void*) {}
 void PadMgr_Poll(void*) {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
+        if (editor::event(ev))                  // the level editor (F2) took it
+            continue;
         if (ev.type == SDL_QUIT ||
             (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE)) {
             printf("clean exit\n");
@@ -469,6 +472,14 @@ void PadMgr_Poll(void*) {
         // F11: the whole screen, and back.
         if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F11)
             hal::gs::toggle_fullscreen();
+        // F3: the modern lighting off and on again (to compare).
+        if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F3)
+            printf("[GS] modern lighting %s\n", hal::gs::toggle_lighting() ? "on" : "off");
+        // F4: print where the player and the camera are.
+        if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F4) {
+            void hle_ask_where();
+            hle_ask_where();
+        }
     }
     hal::pad::poll();
 

@@ -498,6 +498,8 @@ void World_PlacePlayer(World* self, int exit) {
     CharaMgr_SetTransform(charas, 0, matrix);
 }
 
+extern "C" void Native_WorldPost();
+
 // ── 0x1DD530 ──────────────────────────────────────────────────────────────
 int World_Draw(World* self) {
     // Nothing is drawn while a map is still coming in.
@@ -528,6 +530,7 @@ int World_Draw(World* self) {
     }
     Targeting_Draw(P(self->targeting), MapState_GetMap(P(self->mapState)));
     RenderMgr_Draw(*gRenderMgr);
+    Native_WorldPost();         // native: the modern lighting, if a mod asked for it
     if (self->dayEnding != 0)
         GsDevice_ClearScreenColor(*gGsDevice, (u32)(u8)self->dayEndFade << 24);
     if (self->hideHud == 0) {

@@ -12,13 +12,14 @@ Switch a mod off with `enabled = 0` in its `mod.ini`; change what it does under
 `[settings]` there.  `WOTS2_MODS=0 ./build/wots2 extracted` runs without any,
 `WOTS2_MODS=<directory>` takes them from somewhere else.
 
-## The three that come with the game
+## The four that come with the game
 
 | Mod | What it does | Settings |
 |-----|--------------|----------|
 | `widescreen` | The 3D view opened out to the sides — the same height of view, more to the left and right. | `aspect` = `auto` (the window's shape), `16:9`, `21:9`, a number; `hud` = `edges` (gauges, enemy plates and the HUD's text keep to the picture's edges) or `center` |
 | `resolution` | Draws the picture with more lines than the PS2's 448. | `internal` = `window` (as many as the window has), a number of lines (`1080`), or `2x`, `3x`…; `window` = `1920x1080`; `fullscreen` = `1` |
 | `fps_unlock` | Shows more than thirty pictures a second. | `fps` = `display` or a number (`60`, `120`…); `vsync` = `1` / `0` |
+| `lighting` | Modern lighting in the world: the sun's shadows of characters, swords and things (in place of the dark blots under their feet), ambient occlusion, the lanterns of the night maps lighting the ground, bloom, a colour grade. | `shadows`, `ao`, `lanterns`, `grade` = `1` / `0`; `shadow_strength`, `shadow_quality` (`low`, `high`, `ultra`); `ao_strength`, `ao_radius`; `lantern_strength`; `bloom` (0 = off), `bloom_threshold`; `contrast`, `saturation`, `warmth`, `vignette` |
 
 **F11** switches between the window and the whole screen at any time.
 
@@ -32,7 +33,14 @@ Good to know:
 - With `widescreen`, menus, story text and movies stay as the 4:3 screens they
   were drawn as, in the middle; only the 3D world (and fades, the pause
   menu's dimming, the letterbox bars) fills the width.
-- All three only change how the finished frame is drawn.  With them off the
+- **F3** switches the modern lighting off and on while playing, to compare.
+- **F4** prints where you are (the map, your position, the camera) on the
+  terminal — handy for reporting something that looks wrong.
+- `lighting` only touches the 3D world: menus, the character setup screen,
+  story text and movies are as they were.  Its shadows come from the map's
+  own sun (at night, the moon: fainter); the map's baked lighting is kept, so
+  buildings do not cast new shadows — characters and things do.
+- All four only change how the finished frame is drawn.  With them off the
   picture is pixel for pixel what it was.
 
 ## Making a mod
@@ -75,6 +83,26 @@ mods/mymod/files/Us/script/CTX/Opening.sx    an event script
 (Not replaceable this way: the music and voice streams in `BGM/` and the
 movies, which are read straight from the disc directory.)
 
+### Texture packs
+
+HD texture packs made for **PCSX2** work as they are.  Put the pack's
+replacement files (the `.dds` files named like
+`1011ff5a8e3dfa33-f89beb808c422937-00005dd4.dds`, usually in a folder
+`SLUS-20893/replacements`) under a mod's `textures/` folder, any layout:
+
+```
+mods/hd_textures/mod.ini
+mods/hd_textures/textures/SLUS-20893/replacements/*.dds
+```
+
+or point at them from the `mod.ini`: `[mod]` `textures = /path/to/replacements`.
+The game works out PCSX2's name for every texture it loads — a hash of the
+texture as it lies in the PS2's video memory, of its palette, and its
+format — and uses the pack's picture when there is one.  DDS files in DXT1,
+DXT3 or DXT5 are read (what PCSX2 packs use); PNG is not yet.  A pack only
+replaces what its author replaced; `WOTS2_TRACE_TEXTURES=1` prints every
+texture's name and whether the pack had it.
+
 ### Code
 
 The library exports one function and is built against
@@ -104,7 +132,8 @@ What the table gives a mod:
 | | |
 |---|---|
 | `log`, `setting` | a line on the terminal; a value from its `mod.ini` |
-| `get_video`, `set_video` | the shape, size and rate of the picture (what the three mods above use) |
+| `get_video`, `set_video` | the shape, size and rate of the picture (what the first three mods above use) |
+| `get_lighting`, `set_lighting` | the modern lighting (`Wots2Lighting`; API version 2) |
 | `guest_ptr(address)` | the game's memory: the PS2's addresses, as `config/globals.json` gives them |
 | `on_frame(fn, user)` | a call once every frame of the game |
 | `pad_buttons(port)` | the buttons held, as the game sees them |
@@ -114,3 +143,46 @@ A caution about `hook`: it replaces what is *called by address* — virtual
 methods, the constructors of scenes and screens, everything the game reaches
 through a table.  A decompiled function that calls another directly, as
 ordinary C++, does not go through it.  For those, change the source.
+
+## The level editor
+
+Press **F2** while walking about in the world (not in a menu or a story scene)
+and the level editor opens over the picture. The game holds still while it is
+open (untick *Hold the game still* to watch people walk about); F2 or Esc
+closes it and the game goes on.
+
+A map here is three things, and the editor changes the two that make it play
+differently:
+
+| | What | In the editor |
+|---|---|---|
+| model | the 3D artwork (`Common/map/*.mdl`) | not edited |
+| placement file | crates, pots, things to pick up, scenery, sliding doors, smoke and fire, sounds of the place (`object/Iom/*.Iom`) | **Objects** tab: pick, drag, turn, copy, delete, add any of the 126 kinds |
+| collision file | the grid of 25 cm cells: walkable ground, walls, doors, exits, hint spots, the ground's height, and the points one arrives at (`Common/collision/*.col`) | **Cells** tab: paint cells with any of the map's cell types, change a type (every cell of it changes); **Points** tab: move the arrival points |
+
+Controls:
+
+| | |
+|---|---|
+| Right mouse held + move | look round |
+| W A S D, Q / E | fly; down / up (Shift: faster) |
+| Left click / drag | pick and move a dot (Objects, Points), paint (Cells) |
+| Ctrl + click (Cells) | take the type under the mouse |
+| R / Shift+R | turn the picked object 15° |
+| Ctrl+D, Delete | copy, remove it |
+| Ctrl+Z, Ctrl+S | undo, save |
+
+Objects are shown as dots: orange crates, blue doors, green scenery, yellow
+things to pick up, red smoke and fire, purple sounds. Changes show at once,
+except for smoke, fire and sounds, which take their new places the next time
+the map is entered.
+
+**Saving writes a mod**, `mods/level_edits/`: the changed files go under its
+`files/`, so they take the place of the game's own the next time the map is
+loaded (the disc's files are never changed). To undo everything, delete
+`mods/level_edits`; to undo one map, delete its file there; to share your
+edits, share the folder.
+
+Not possible yet: changing the 3D model itself, making a placement file for a
+map that has none, and changing which people appear where (that is in the
+task files and the event scripts).

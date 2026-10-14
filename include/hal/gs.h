@@ -9,6 +9,8 @@
 // GS convention: on textured draws 0x80 means 1.0 (RGB 0x80 leaves a texel
 // unchanged); untextured draws take RGB as it is.  Alpha 0x80 is always 1.0.
 
+struct SDL_Window;
+
 namespace hal::gs {
 
 void init(int width, int height, const char* title);
@@ -33,6 +35,14 @@ void set_z(u32 z);
 void set_alpha_ref(int ref);   // pixels with alpha below ref/128 are discarded
 
 u32  create_texture(const u8* rgba, int width, int height);
+// A block-compressed texture (texture packs: DDS files), its mipmaps from
+// the largest down.
+enum class Compressed { DXT1, DXT3, DXT5 };
+struct Level { int width, height; const u8* data; size_t size; };
+u32  create_texture_compressed(Compressed format, const Level* levels, int count);
+// Says that a texture is a cut-out (every texel clear or opaque; worked out by
+// itself for create_texture): in 3D it is drawn opaque where it is not cut.
+void set_cutout(u32 tex, bool on);
 void destroy_texture(u32 tex);
 // A copy of the frame as drawn so far, as an opaque texture of the screen's
 // size (its texels are the frame's pixels, top row first).  What the PS2
@@ -69,7 +79,14 @@ void draw_prim_depth(u32 tex, int tex_w, int tex_h, Prim prim, const Vtx* verts,
 // u/v are normalised (0–1 across the texture).  Texels with alpha below one
 // half are discarded.
 struct Vtx3 { float x, y, z, u, v; u32 rgba; };
-void begin_3d(const float* mvp);
+// What a view draws, for the modern lighting (set_lighting): the map and the
+// models in it (characters, swords, objects) are in world coordinates under
+// the world's view; everything else is left as it is.
+enum class View : u8 { Other, Sky, Map, Model };
+// `who` names what is drawn (a character, an object…) for the pictures made
+// in between frames: the view is paired only with the same `who` of the
+// frame before (0 = not said: paired by what its meshes are and their order).
+void begin_3d(const float* mvp, View kind = View::Other, u32 who = 0);
 void draw_mesh(u32 tex, const Vtx3* verts, int count, Prim prim);
 void end_3d();
 // Between begin_3d and end_3d.  A depth bias (in the smallest steps the depth
@@ -106,7 +123,58 @@ float wide_margin();
 // frame are without asking).
 void  set_full_width();
 
+// ── Modern lighting (a mod's choice; all off by default).  Played on top of
+// what the game draws, in the world only:
+//   shadows      the sun's shadows of characters, swords and objects on the
+//                map and on each other (a shadow map from the map's first light)
+//   ao           ambient occlusion from the depth buffer: corners, the feet
+//                on the ground, under eaves
+//   lanterns     the map's point lights (lanterns at night, the flash of a
+//                blow) light the ground round them, per pixel
+//   bloom        bright things glow
+//   grade        a gentle contrast curve, saturation, warmth and vignette
+struct Lighting {
+    bool  shadows = false;
+    float shadowStrength = 0.55f;
+    int   shadowSize = 2048;        // texels each way
+    float shadowReach = 16.0f;      // units from the middle of the view each way
+    bool  ao = false;
+    float aoStrength = 1.0f, aoRadius = 0.35f;
+    bool  lanterns = false;
+    float lanternStrength = 1.0f, lanternRadius = 5.0f;
+    float bloom = 0.0f;             // 0 = off
+    float bloomThreshold = 0.78f;
+    bool  grade = false;
+    float contrast = 0.25f, saturation = 1.1f, warmth = 0.0f, vignette = 0.25f;
+};
+void     set_lighting(const Lighting& lighting);
+Lighting lighting();
+// F3: hold the lighting back (or let it be again) without forgetting it → on now.
+bool     toggle_lighting();
+// The world's view this frame (MapState_Draw): its world→camera and
+// camera→clip matrices (row-vector convention), the direction towards the
+// sun and its colour, and the point lights: n × {x, y, z, radius, r, g, b, 0}.
+void set_world(const float* view, const float* proj, const float* sunDir, const float* sunColour,
+               const float* lights, int n);
+// The world is drawn (World_Draw, before the HUD): ambient occlusion, bloom
+// and the grade are applied here.
+void world_post();
+// True when the sun's shadows are being drawn in this frame (the game's own blob and
+// projected shadows then step aside).
+bool real_shadows();
+
 int frame_count();   // frames presented so far
+
+// For a tool drawn over the picture (the level editor, native/editor.cpp):
+// the window and its GL context; a function called when each picture is on
+// the window, just before it is shown; where on the window (in drawable
+// pixels: x0, y0, x1, y1) the frame lies; and by how much 3D clip x is
+// narrowed in a frame wider than the game's screen.
+SDL_Window* window();
+void* gl_context();
+void  set_overlay(void (*draw)());
+void  present_rect(int out[4]);
+float clip_x_scale();
 
 // Screen dimensions (PS2 default: 640×448 for NTSC)
 int screen_width();

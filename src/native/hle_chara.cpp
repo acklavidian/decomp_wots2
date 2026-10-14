@@ -22,6 +22,7 @@ bool hle_make_sword(int type, void* out);       // hle_gameplay.cpp (debug)
 void hle_carry_sword(const void* sword);
 #include "native/hle.h"
 #include "native/model.h"
+#include "native/editor_hooks.h"
 #include "native/sprites.h"
 
 #include <cmath>
@@ -42,6 +43,9 @@ extern "C" {
     void  Chara_StepMap(Chara* self, MapCollision* map);            // 0x1CE580
     void  hle_world_follow(float* matrix);
 }
+
+static bool g_whereAsked = false;
+extern "C" void hle_ask_where() { g_whereAsked = true; }
 
 namespace {
 
@@ -188,6 +192,19 @@ void player_step_map(Chara* c, MapCollision* map) {
         printf("[player] frame %d: at %.2f %.2f %.2f facing %.2f %.2f, action %#x flags %#x act %#x state %#x cell %#x/%d\n",
                hal::gs::frame_count(), m[12], m[13], m[14], m[8], m[10], b->action, b->flags, b->actionFlags,
                b->state, c->cellFlags, c->cellIndex);
+    }
+    // F4: where the player is, and the camera (to report a place that looks wrong).
+    if (g_whereAsked) {
+        g_whereAsked = false;
+        const float* m = params_of(c)->matrix;
+        EditorMap map{};
+        if (Editor_CurrentMap(&map))
+            printf("[where] map %d %s: player at %.2f %.2f %.2f facing %.2f %.2f; camera at %.2f %.2f %.2f looking %.2f %.2f %.2f\n",
+                   map.index, map.modelPath.c_str(), m[12], m[13], m[14], m[8], m[10], map.eye[0], map.eye[1], map.eye[2],
+                   map.dir[0], map.dir[1], map.dir[2]);
+        else
+            printf("[where] player at %.2f %.2f %.2f\n", m[12], m[13], m[14]);
+        fflush(stdout);
     }
     // WOTS2_KILL_PLAYER=frame (debug): the player drops dead then, to see
     // what dying does.
@@ -413,6 +430,11 @@ static void current_view(float* mvp) {
     mat_mul(view, proj, mvp);
 }
 
+// Who is being drawn (for the pictures in between: see begin_3d's `who`).
+// The sword parts drawn after a character's body are taken as its own.
+static u32 g_drawing = 0;
+static u32 who_of(u32 a, u32 b) { return (a * 0x9E3779B1u) ^ (b + 0x7F4A7C15u + (a << 6) + (a >> 2)) | 1u; }
+
 void CharaModels_Draw(Chara* c, int) {
     if (getenv("WOTS2_DUMP_ACTORS") && hal::gs::frame_count() % 200 == 0) {     // debug hook
         const float* m = params_of(c)->matrix;
@@ -473,7 +495,8 @@ void CharaModels_Draw(Chara* c, int) {
 
     float mvp[16];
     current_view(mvp);
-    hal::gs::begin_3d(mvp);
+    g_drawing = guest::addr(c);
+    hal::gs::begin_3d(mvp, hal::gs::View::Model, who_of(g_drawing, 0));
     // Lit by the map's lights, dimmed by the light of the cell it stands on
     // (Chara's light, 127 = full; it eases from cell to cell).
     model::Lighting light = model::scene_light();
@@ -504,7 +527,8 @@ void CharaModels_Draw(Chara* c, int) {
 // silhouette is laid on the level ground under the player.
 void hle_chara_shadow(Chara* c, float strength) {
     auto it = g_native.find(guest::addr(c));
-    if (it == g_native.end() || !it->second.models || !it->second.models->loaded || getenv("WOTS2_NO_SHADOW"))
+    if (it == g_native.end() || !it->second.models || !it->second.models->loaded || getenv("WOTS2_NO_SHADOW") ||
+        hal::gs::real_shadows())
         return;
     ModelSet* set = it->second.models;
     const CharaParams* p = params_of(c);
@@ -578,7 +602,10 @@ void hle_chara_shadow(Chara* c, float strength) {
         for (int k = 0; k < 3; k++)
             at[k] = C[k] + R[k] * kCorner[i][0] * e + U[k] * kCorner[i][1] * e;
         const float s = (ground - at[1]) / L[1];
-        corner[i] = {at[0] + L[0] * s, ground, at[2] + L[2] * s, (kCorner[i][0] + 1) / 2, (kCorner[i][1] + 1) / 2, rgba};
+        // (The target's rows are top first, as the frame's are: its v runs
+        // down U.  Taken the other way the shadow was the player's mirror
+        // image, and turned the wrong way when the player turned.)
+        corner[i] = {at[0] + L[0] * s, ground, at[2] + L[2] * s, (kCorner[i][0] + 1) / 2, (1 - kCorner[i][1]) / 2, rgba};
     }
     const hal::gs::Vtx3 quad[6] = {corner[0], corner[1], corner[2], corner[2], corner[1], corner[3]};
     float mvp[16];
@@ -678,7 +705,7 @@ int draw_sword_part(const s16* swordModel, int idsAt, int slot, const float* mat
     else
         memcpy(pose, matrix, sizeof pose);
     current_view(mvp);
-    hal::gs::begin_3d(mvp);
+    hal::gs::begin_3d(mvp, hal::gs::View::Model, who_of(g_drawing, (u32)idsAt << 8 | (u32)slot));
     part->draw(pose, sword_texture(db, texture), &model::scene_light());
     hal::gs::end_3d();
     return 1;
@@ -725,7 +752,12 @@ static void object_draw(const char* path, const float* matrix, const char* textu
         memcpy(pose.data(), matrix, 16 * sizeof(float));
     float mvp[16];
     current_view(mvp);
-    hal::gs::begin_3d(mvp);
+    // (An object is known by where its matrix lives: the object's own, or
+    // the accessory's / splinter's — the same from frame to frame.)
+    u32 name = 0;
+    for (const char* p = path; *p; p++)
+        name = name * 31u + (u8)*p;
+    hal::gs::begin_3d(mvp, hal::gs::View::Model, who_of((u32)(uintptr_t)matrix, name));
     sprites::Sheet* shared = nullptr;
     if (textures != nullptr) {
         static std::map<std::string, sprites::Sheet> sheets;

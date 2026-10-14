@@ -35,15 +35,23 @@ blood, sparks and blade trails, and controller support.
 
 ## Mods, built in
 
-A mod loader ships with three mods switched on:
+A mod loader ships with four mods switched on:
 
 - **Widescreen** — the 3D view opens out to the sides. 16:9, 21:9, whatever shape your window is.
 - **Resolution** — draw at 1080p, 4K, or as many lines as your window has, instead of the PS2's 448.
 - **FPS unlock** — 60, 120, 144 pictures a second. The game still thinks at 30; everything in between is interpolated.
+- **Modern lighting** — real sun shadows from every character and object, ambient occlusion, lanterns that light the street at night, bloom and a colour grade.
+
+![Without and with modern lighting: the first fight, and Amakaze by night](docs/lighting_native.png)
 
 Each is a folder with an `.ini` you can edit. Writing your own takes one header:
 replace any game file by dropping it in a folder, or load code that reads and
 writes the game's memory every frame. The guide is [`mods/README.md`](mods/README.md).
+**HD texture packs made for PCSX2 work as they are:** put the pack's `.dds` files in a
+mod's `textures/` folder.
+
+**A level editor is built in too:** press F2 in the world to move, add and
+remove objects, paint where one can walk, and save the result as a mod.
 
 <div align="center">
 

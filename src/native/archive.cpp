@@ -209,7 +209,21 @@ bool open(const char* volume_path) {
 void set_prefix(const char* prefix) { g_prefix = prefix; }
 
 static std::vector<std::string> g_overlays;
-void add_overlay(const char* dir) { g_overlays.push_back(dir); }
+void add_overlay(const char* dir) {
+    for (const std::string& d : g_overlays)
+        if (d == dir)
+            return;
+    g_overlays.push_back(dir);
+}
+
+std::string full_path(const std::string& path) {
+    std::string full = path;
+    if (!starts_with_nocase(full, "Common/") && !starts_with_nocase(full, g_prefix.c_str()))
+        full = g_prefix + full;
+    for (char& c : full)
+        if (c == '\\') c = '/';
+    return full;
+}
 
 bool read(const std::string& path, std::vector<u8>& out) {
     std::string full = path;

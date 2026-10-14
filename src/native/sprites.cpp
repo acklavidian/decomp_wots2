@@ -1,5 +1,6 @@
 #include "native/sprites.h"
 #include "hal/gs.h"
+#include "native/texture_pack.h"
 
 #include <cstdio>
 #include <algorithm>
@@ -59,6 +60,79 @@ std::vector<u8> gs_memory_from_ct32(const u8* data, size_t size, u32 uploadBw, u
     return mem;
 }
 
+// PCSX2's hash of a texture (GSTextureCache's HashTextureLevel): XXH3-64
+// over the 256-byte GS blocks the texture covers, in its own format, block
+// row by block row — the raw bytes, as the upload left them.  `mem` starts
+// at the texture's base; `pagesPerRow` is how the decoder above lays out
+// pages.  A texture smaller than a block is hashed as its texels instead
+// (indices one byte each, 32-bit colour four), row by row.
+u64 pack_hash(const std::vector<u8>& mem, int psm, int log2w, int log2h, u32 pagesPerRow,
+              const std::vector<u8>& texels) {
+    const int w = 1 << log2w, h = 1 << log2h;
+    const int bw = psm == 0x14 ? 32 : psm == 0x13 ? 16 : 8, bh = psm == 0x00 ? 8 : 16;
+    if (w < bw || h < bh)
+        return texture_pack::hash(texels.data(), texels.size());
+    std::vector<u8> blocks;
+    blocks.reserve((size_t)(w / bw) * (size_t)(h / bh) * 256);
+    for (int by = 0; by < h / bh; by++)
+        for (int bx = 0; bx < w / bw; bx++) {
+            size_t addr;
+            if (psm == 0x13)        // 128 × 64 pages
+                addr = ((size_t)(by * 16 / 64) * pagesPerRow + (size_t)(bx * 16 / 128)) * 8192 + kBlock32[by % 4][bx % 8] * 256;
+            else if (psm == 0x14)   // 128 × 128 pages
+                addr = ((size_t)(by * 16 / 128) * pagesPerRow + (size_t)(bx * 32 / 128)) * 8192 + kBlock4[by % 8][bx % 4] * 256;
+            else                    // 32-bit: 64 × 32 pages
+                addr = ((size_t)(by * 8 / 32) * pagesPerRow + (size_t)(bx * 8 / 64)) * 8192 + kBlock32[by % 4][bx % 8] * 256;
+            for (size_t i = 0; i < 256; i++)
+                blocks.push_back(addr + i < mem.size() ? mem[addr + i] : 0);
+        }
+    return texture_pack::hash(blocks.data(), blocks.size());
+}
+
+// A cut-out texture (every texel either clear or opaque) is given the
+// colour of its opaque neighbours in the clear texels next to them.  Drawn
+// with smooth filtering, an edge pixel mixes the two; the colour hidden under
+// the clear texels is whatever the artist left there (the grass of the
+// magistrate's yard: a paler green), which showed as a dotted fringe.  Only
+// pixels that mix in a clear texel change.
+void bleed_cutout(std::vector<u8>& rgba, int w, int h) {
+    const size_t n = (size_t)w * h;
+    size_t clear = 0;
+    for (size_t i = 0; i < n; i++) {
+        u8 a = rgba[i * 4 + 3];
+        if (a != 0 && a != 255) return;
+        clear += a == 0;
+    }
+    if (clear == 0 || clear == n) return;
+    std::vector<u8> filled(n), next;
+    for (size_t i = 0; i < n; i++) filled[i] = rgba[i * 4 + 3] != 0;
+    for (int pass = 0; pass < 4; pass++) {
+        next = filled;
+        bool any = false;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                const size_t i = (size_t)y * w + x;
+                if (filled[i]) continue;
+                u32 sum[3] = {0, 0, 0}, k = 0;
+                for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++) {
+                        const int xx = x + dx, yy = y + dy;
+                        if ((dx | dy) == 0 || xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                        const size_t j = (size_t)yy * w + xx;
+                        if (!filled[j]) continue;
+                        for (int c = 0; c < 3; c++) sum[c] += rgba[j * 4 + c];
+                        k++;
+                    }
+                if (!k) continue;
+                for (int c = 0; c < 3; c++) rgba[i * 4 + c] = (u8)(sum[c] / k);
+                next[i] = 1;
+                any = true;
+            }
+        filled.swap(next);
+        if (!any) break;
+    }
+}
+
 }  // namespace
 
 namespace sprites {
@@ -103,6 +177,13 @@ bool Sheet::load(const std::vector<u8>& blob) {
         // Width of the 32-bit image that is uploaded: normally half the
         // texture's width, less when the picture does not fill the texture.
         u32 uploadW = rd16(d + 0x10);
+        // Pages per row when the texture is *read*: its own buffer width
+        // (TEX0's TBW, +0x06, in 64 texels) over the indexed page's 128.  It
+        // need not be the upload's: a 4-bit 128 × 256 texture is uploaded as
+        // a 32-bit image two pages wide but read one page wide, two down —
+        // taking the upload's width put its lower half on a page that is not
+        // there (black wall panels, scrambled clothes).
+        const u32 tbw = rd16(d + 6);
 
         const u8* pixels = &blob[0] + origin + pixOff;
         // The buffer width the pixels were uploaded with, and where in that
@@ -127,6 +208,8 @@ bool Sheet::load(const std::vector<u8>& blob) {
             t.clutRaw.assign(&blob[origin + clutOff], &blob[origin + clutOff] + take);
         }
 
+        const u32 readPpr = (t.psm == 0x13 || t.psm == 0x14) && tbw >= 2 && tbw * 64 >= (u32)t.width
+                          ? tbw / 2 : uploadBw;
         if (pixels && t.psm == 0x00) {
             // 32-bit colour, no palette: the bytes are the pixels.
             u32 w = uploadW ? uploadW : (u32)t.width;
@@ -137,6 +220,13 @@ bool Sheet::load(const std::vector<u8>& blob) {
                 if (pixels + ((size_t)y + 1) * w * 4 <= &blob[0] + blob.size())
                     memcpy(&t.direct[(size_t)y * t.width * 4], pixels + (size_t)y * w * 4,
                            (size_t)(w < (u32)t.width ? w : (u32)t.width) * 4);
+            if (texture_pack::active() && memBw && pixels + pixSize <= &blob[0] + blob.size()) {
+                std::vector<u8> whole = gs_memory_from_ct32(pixels, pixSize, memBw, w);
+                std::vector<u8> mem(whole.begin() + (memStart < whole.size() ? memStart : whole.size()), whole.end());
+                t.packHash = pack_hash(mem, 0x00, rd16(d + 8), rd16(d + 10), memBw, t.direct);
+                t.packBits = (u32)rd16(d + 8) << 6 | (u32)rd16(d + 10) << 10;
+                t.packHashed = true;
+            }
         } else if (pixels && t.psm == 0x1B) {
             // 8-bit indices in the high byte of 32-bit pixels: uploaded in
             // that format, so the file holds them in plain row order.
@@ -160,13 +250,13 @@ bool Sheet::load(const std::vector<u8>& blob) {
                     u8 value = 0;
                     if (t.psm == 0x13) {
                         // 8-bit: 128×64 pages, 16×16 blocks (same block order as 32-bit)
-                        u32 addr = ((y / 64) * uploadBw + x / 128) * 8192
+                        u32 addr = ((y / 64) * readPpr + x / 128) * 8192
                                  + kBlock32[(y / 16) % 4][(x / 16) % 8] * 256
                                  + column_index(x % 16, y % 16, 4);
                         if (addr < mem.size()) value = mem[addr];
                     } else if (t.psm == 0x14) {
                         // 4-bit: 128×128 pages, 32×16 blocks, addressed in nibbles
-                        u32 nib = ((y / 128) * uploadBw + x / 128) * 16384
+                        u32 nib = ((y / 128) * readPpr + x / 128) * 16384
                                 + kBlock4[(y / 16) % 8][(x / 32) % 4] * 512
                                 + column_index(x % 32, y % 16, 8);
                         if (nib / 2 < mem.size())
@@ -174,6 +264,11 @@ bool Sheet::load(const std::vector<u8>& blob) {
                     }
                     t.indices[(size_t)y * t.width + x] = value;
                 }
+            }
+            if (texture_pack::active()) {
+                t.packHash = pack_hash(mem, t.psm, rd16(d + 8), rd16(d + 10), readPpr, t.indices);
+                t.packBits = (u32)t.psm | (u32)rd16(d + 8) << 6 | (u32)rd16(d + 10) << 10;
+                t.packHashed = true;
             }
         } else if (pixels && t.psm == 0x13 && pixSize >= (u32)(t.width * t.height)) {
             t.indices.assign(pixels, pixels + (size_t)t.width * t.height);
@@ -201,11 +296,15 @@ u32 Sheet::texture_for(const Rect& rect) {
         auto it = t.glTextures.find(0);
         if (it != t.glTextures.end())
             return it->second;
+        if (t.packHashed)
+            if (u32 tex = texture_pack::find(t.packHash, 0, t.packBits))
+                return t.glTextures[0] = tex;
         std::vector<u8> rgba = t.direct;
         for (size_t i = 3; i < rgba.size(); i += 4) {
             u32 a = rgba[i] * 255u / 128u;          // GS alpha: 0x80 is opaque
             rgba[i] = (u8)(a > 255 ? 255 : a);
         }
+        bleed_cutout(rgba, t.width, t.height);
         return t.glTextures[0] = hal::gs::create_texture(rgba.data(), t.width, t.height);
     }
     if (t.indices.empty())
@@ -234,6 +333,24 @@ u32 Sheet::texture_for(const Rect& rect) {
             else if ((i & 0x18) == 0x10) src = i - 8;
         }
         memcpy(palette[i], raw + src * 4, 4);
+    }
+    // A texture pack's replacement: named by the palette as the GS holds it
+    // (index order, its own alpha).
+    if (t.packHashed && t.psm != 0x1B)
+        if (u32 tex = texture_pack::find(t.packHash, texture_pack::hash(palette, entries * 4), t.packBits)) {
+            // A cut-out in the game is one in the pack too.
+            bool used[256] = {}, clear = false, opaque = false, between = false;
+            for (u8 i : t.indices) used[i & (entries - 1)] = true;
+            for (size_t i = 0; i < entries; i++)
+                if (used[i]) {
+                    clear |= palette[i][3] == 0;
+                    opaque |= palette[i][3] >= 0x80;
+                    between |= palette[i][3] != 0 && palette[i][3] < 0x80;
+                }
+            hal::gs::set_cutout(tex, clear && opaque && !between);
+            return t.glTextures[clut] = tex;
+        }
+    for (size_t i = 0; i < entries; i++) {
         u32 a = palette[i][3] * 255u / 128u;       // GS alpha: 0x80 is opaque
         palette[i][3] = (u8)(a > 255 ? 255 : a);
     }
@@ -241,6 +358,7 @@ u32 Sheet::texture_for(const Rect& rect) {
     std::vector<u8> rgba((size_t)t.width * t.height * 4);
     for (size_t i = 0; i < t.indices.size(); i++)
         memcpy(&rgba[i * 4], palette[t.indices[i] & (entries - 1)], 4);
+    bleed_cutout(rgba, t.width, t.height);
     u32 tex = hal::gs::create_texture(rgba.data(), t.width, t.height);
     t.glTextures[clut] = tex;
     return tex;
@@ -249,7 +367,7 @@ u32 Sheet::texture_for(const Rect& rect) {
 void Sheet::release() {
     for (Texture& t : textures) {
         for (auto& [clut, tex] : t.glTextures)
-            if (tex) hal::gs::destroy_texture(tex);
+            if (tex && !texture_pack::owns(tex)) hal::gs::destroy_texture(tex);
         t.glTextures.clear();
     }
 }

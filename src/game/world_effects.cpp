@@ -216,6 +216,8 @@ struct ShadowEffect {
     s32 sprite;         // +0x14  "shadow  " of the effect sprites
 };
 
+extern "C" int Native_RealShadows();
+
 // 0x1674B0
 ShadowEffect* Shadow_Ctor(ShadowEffect* self) {
     Effect_Ctor(&self->base);
@@ -256,7 +258,7 @@ inline void Scale3(float* v, float k) { v[0] *= k; v[1] *= k; v[2] *= k; }
 int Shadow_Draw(ShadowEffect* self) {
     if (self->base.type == 0)
         return 0;
-    if (self->off != 0)
+    if (self->off != 0 || Native_RealShadows())    // native: the sun's shadows of the modern lighting instead
         return 1;
     const u32 model = P<CharaParams>(self->params)->link[1];
     if (model == 0)

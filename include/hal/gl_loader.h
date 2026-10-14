@@ -12,7 +12,8 @@
     X(glBufferData) X(glBlitFramebuffer) X(glBlendEquation) X(glBindRenderbuffer) X(glUniform4fv) \
     X(glUniform2f) X(glUniform1i) X(glLinkProgram) X(glGenVertexArrays) X(glGenRenderbuffers) X(glGenBuffers) \
     X(glFramebufferRenderbuffer) X(glCreateProgram) X(glUniformMatrix4fv) X(glUniform3fv) X(glShaderSource) \
-    X(glGetShaderiv) X(glGetShaderInfoLog) X(glCreateShader) X(glCompileShader) X(glCheckFramebufferStatus)
+    X(glGetShaderiv) X(glGetShaderInfoLog) X(glCreateShader) X(glCompileShader) X(glCheckFramebufferStatus) \
+    X(glGetProgramiv) X(glGetProgramInfoLog) X(glActiveTexture) X(glUniform3f) X(glDrawBuffers) X(glClearBufferfv) X(glCompressedTexImage2D)
 
 #define X(name) inline decltype(&::name) wots2_##name = nullptr;
 WOTS2_GL_FUNCTIONS(X)
@@ -63,6 +64,13 @@ inline bool wots2_gl_load() {
 #define glCreateShader wots2_glCreateShader
 #define glCompileShader wots2_glCompileShader
 #define glCheckFramebufferStatus wots2_glCheckFramebufferStatus
+#define glGetProgramiv wots2_glGetProgramiv
+#define glGetProgramInfoLog wots2_glGetProgramInfoLog
+#define glActiveTexture wots2_glActiveTexture
+#define glUniform3f wots2_glUniform3f
+#define glDrawBuffers wots2_glDrawBuffers
+#define glClearBufferfv wots2_glClearBufferfv
+#define glCompressedTexImage2D wots2_glCompressedTexImage2D
 #else
 inline bool wots2_gl_load() { return true; }
 #endif

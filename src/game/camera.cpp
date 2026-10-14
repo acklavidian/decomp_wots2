@@ -19,6 +19,8 @@
 // pivot are tried and the one nearest the present camera that is long enough
 // wins; failing that the camera stays where it is.
 
+#include <cstdio>
+#include <cstdlib>
 #include "engine/pad.h"
 #include "game/chara_resources.h"
 #include "game/map_collision.h"
@@ -660,6 +662,9 @@ void CamList_Apply(void* mem) {
 // ── 0x150E60: a new controller takes over (the old one is destroyed) ──────
 void CamList_Push(void* mem, void* controller) {
     CamList* self = static_cast<CamList*>(mem);
+    static const bool traceCam = getenv("WOTS2_TRACE_CAM") != nullptr;
+    if (traceCam)
+        printf("[cam] push controller vtable 0x%X (cuts %d)\n", controller ? *static_cast<u32*>(controller) : 0u, self->cuts);
     DropController(self);
     State(self)->controller = guest::addr(controller);
     if (controller == nullptr)

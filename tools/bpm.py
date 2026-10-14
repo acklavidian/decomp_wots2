@@ -188,17 +188,25 @@ class Texture:
                     rect[:self.height, :self.width]
                 self._indices = img
             elif self.psm == 0x13 and self.upload_bw:
-                self._indices = unswizzle8(self.pixels, self.width, self.height, self.upload_bw, self.up_w,
-                                           self.mem_bw, self.start)
+                self._indices = unswizzle8(self.pixels, self.width, self.height, self.read_bw(), self.up_w,
+                                           self.mem_bw or self.upload_bw, self.start)
             elif self.psm == 0x14 and self.upload_bw:
-                self._indices = unswizzle4(self.pixels, self.width, self.height, self.upload_bw, self.up_w,
-                                           self.mem_bw, self.start)
+                self._indices = unswizzle4(self.pixels, self.width, self.height, self.read_bw(), self.up_w,
+                                           self.mem_bw or self.upload_bw, self.start)
             elif self.psm == 0x13:
                 self._indices = np.frombuffer(self.pixels, np.uint8)[:self.width * self.height] \
                     .reshape(self.height, self.width)
             else:
                 raise NotImplementedError(f"pixel format {self.psm:#x}")
         return self._indices
+
+    def read_bw(self) -> int:
+        """Pages per row when read: the texture's own buffer width (TEX0 TBW, +0x06) over the
+        indexed page's 128 texels -- not the upload's (a 4-bit 128x256 texture is uploaded two
+        32-bit pages wide but read one page wide, two down)."""
+        if self.psm in (0x13, 0x14) and self.tbw >= 2 and self.tbw * 64 >= self.width:
+            return self.tbw // 2
+        return self.upload_bw
 
     @property
     def clut_step(self) -> int:

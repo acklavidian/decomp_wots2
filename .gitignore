@@ -34,3 +34,11 @@ extracted.image
 mods/*/*.dll
 mods/*/*.dylib
 build-*/
+
+# Texture packs (made for PCSX2; large, and not ours to share)
+mods/*/textures/
+mods/hd_textures/
+
+# Fetched by tools/get_loreline.sh (the loreline-story branch); story files made from the disc
+third_party/
+mods/original_story/story/generated/

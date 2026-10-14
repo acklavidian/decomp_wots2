@@ -136,6 +136,7 @@ add_library(native STATIC
     src/native/archive.cpp
     src/native/launcher.cpp
     src/native/sprites.cpp
+    src/native/texture_pack.cpp
     src/native/model.cpp
     src/native/hle.cpp
     src/native/hle_gameplay.cpp
@@ -145,9 +146,35 @@ add_library(native STATIC
     src/native/movie.cpp
     src/native/mcard_native.cpp
     src/native/mods.cpp
+    src/native/editor.cpp
 )
 target_include_directories(native PUBLIC include)
 target_link_libraries(native PRIVATE hal)
+
+# ── Dear ImGui, for the level editor (F2 in the world) ───────────────────────
+include(FetchContent)
+FetchContent_Declare(imgui
+    URL https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(imgui)
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_link_libraries(imgui PUBLIC SDL2::SDL2)
+target_link_libraries(native PRIVATE imgui)
+
+# ── xxHash (XXH3), for texture packs made for PCSX2 (named by its hashes) ────
+FetchContent_Declare(xxhash
+    URL https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.2.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(xxhash)     # (no CMakeLists.txt at its top: only unpacked)
+target_include_directories(native PRIVATE ${xxhash_SOURCE_DIR})
 
 # The launcher unpacks disc images (.iso, or archives holding one) with libarchive.
 find_package(LibArchive QUIET)
@@ -166,14 +193,14 @@ if(WIN32)
     # program has a plain main, so SDL's WinMain shim is not wanted.
     # -mwindows: a windowed program (no console window of its own; the
     # launcher sends what it prints to a console or to wots2.log).
-    target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal
+    target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal imgui
         opengl32 comdlg32 -mwindows -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
 elseif(APPLE)
     # The game's memory sits at its PS2 addresses, from 1 MB up: the zero page
     # must end below that (by default it covers the first 4 GB).
-    target_link_libraries(wots2 PRIVATE game native game native hal -Wl,-pagezero_size,0x10000)
+    target_link_libraries(wots2 PRIVATE game native game native hal imgui -Wl,-pagezero_size,0x10000)
 else()
-    target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal SDL2::SDL2main ${CMAKE_DL_LIBS})
+    target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal imgui SDL2::SDL2main ${CMAKE_DL_LIBS})
 endif()
 
 # ── Mods (mods/<name>/<name>.cpp → mods/<name>/<name>.so, beside its mod.ini) ──

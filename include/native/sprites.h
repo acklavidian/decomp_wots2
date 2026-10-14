@@ -19,6 +19,11 @@ struct Texture {
     std::vector<u8> direct;      // or, for 32-bit textures (psm 0), RGBA pixels
     std::vector<u8> clutRaw;     // palettes as stored in the file
     std::map<int, u32> glTextures;   // palette number → GL texture
+    // For texture packs (native/texture_pack.h): PCSX2's hash of the GS
+    // memory this texture covers, and PSM | TW << 6 | TH << 10.
+    bool packHashed = false;
+    u64  packHash = 0;
+    u32  packBits = 0;
 };
 
 struct Sheet {

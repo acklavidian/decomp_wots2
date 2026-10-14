@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define WOTS2_MOD_API_VERSION 1
+#define WOTS2_MOD_API_VERSION 2      /* 2: get_lighting / set_lighting */
 
 /* What of the picture a mod may change (see include/hal/gs.h, Video). */
 typedef struct Wots2Video {
@@ -39,6 +39,23 @@ typedef struct Wots2Video {
     int   hud_edges;        /* a wider picture: 1 = gauges, enemy plates and the HUD's lines keep to
                                its edges; 0 = they stay where the 4:3 screen had them */
 } Wots2Video;
+
+/* Modern lighting, drawn over the game's own in the world (see
+ * include/hal/gs.h, Lighting).  Strengths are 0 = none, 1 = as meant. */
+typedef struct Wots2Lighting {
+    int   shadows;          /* the sun's shadows of characters and things */
+    float shadow_strength;  /* how dark (0.55) */
+    int   shadow_size;      /* texels of the shadow map each way (2048) */
+    float shadow_reach;     /* units round the middle of the view that get shadows (16) */
+    int   ao;               /* ambient occlusion */
+    float ao_strength, ao_radius;           /* (1, 0.35 units) */
+    int   lanterns;         /* the map's point lights light the ground */
+    float lantern_strength, lantern_radius; /* (1, 5 units) */
+    float bloom;            /* glow of bright things: 0 = off (0.35) */
+    float bloom_threshold;  /* (0.78) */
+    int   grade;            /* contrast, saturation, warmth, vignette below */
+    float contrast, saturation, warmth, vignette;
+} Wots2Lighting;
 
 typedef struct Wots2Api Wots2Api;
 struct Wots2Api {
@@ -72,6 +89,10 @@ struct Wots2Api {
     /* The pad as the game sees it: the buttons held (bit set = down; the
      * masks of include/engine/pad.h) and the sticks (0x80 = centred). */
     uint16_t (*pad_buttons)(int port);
+
+    /* Version 2: modern lighting. */
+    void (*get_lighting)(Wots2Lighting* out);
+    void (*set_lighting)(const Wots2Lighting* lighting);
 };
 
 /* Exported by the mod.  0 = loaded; anything else: the mod is left out. */
