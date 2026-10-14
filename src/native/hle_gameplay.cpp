@@ -343,14 +343,21 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
         const model::Lighting& sun = model::scene_light();
         static float lights[64 * 8];
         const int n = Lights_Gather(lights, 64);
-        hal::gs::set_world(view, proj, sun.dir[0], sun.colour[0], lights, n);
+        hal::gs::set_world(view, proj, sun.dir[0], sun.colour[0], lights, n, sun.ambient);
+        static const bool traceLight = getenv("WOTS2_TRACE_LIGHT") != nullptr;
+        if (traceLight)
+            printf("[light] sun %.2f %.2f %.2f from %.2f %.2f %.2f, ambient %.2f %.2f %.2f\n", sun.colour[0][0],
+                   sun.colour[0][1], sun.colour[0][2], sun.dir[0][0], sun.dir[0][1], sun.dir[0][2], sun.ambient[0],
+                   sun.ambient[1], sun.ambient[2]);
         // For the wind and dust: the game's gust (the render manager's wind,
         // RenderMgr+0x50, set by World_Step from the gust generator) and the player.
         const u32 renderMgr = *guest::ptr<u32>(0x2EE684u);
         const CharaParams* player = CharaResources_GetParams(CharaResources_Get(), 0);
         if (renderMgr != 0 && player != nullptr) {
             const float* wind = guest::ptr<float>(renderMgr + 0x50);
-            hal::gs::set_ambience(wind, &player->matrix[12], *guest::ptr<s32>(0x2EE518u) == 1);
+            const u32 playerData = *guest::ptr<u32>(0x2EE688u);
+            const bool night = playerData != 0 && *guest::ptr<s8>(playerData + 0x102) != 0;
+            hal::gs::set_ambience(wind, &player->matrix[12], *guest::ptr<s32>(0x2EE518u) == 1, night);
             static const bool traceWind = getenv("WOTS2_TRACE_WIND") != nullptr;
             if (traceWind)
                 printf("[wind] %.4f %.4f %.4f\n", wind[0], wind[1], wind[2]);

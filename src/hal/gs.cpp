@@ -111,6 +111,12 @@ uniform int uLights;
 // brightness; xyz = towards the sun (its strength in w), uBump.x = strength.
 uniform vec4 uSunDir;
 uniform vec4 uBump;
+// Un-baking (a prototype): the map relit instead of its painted-in light.
+// x = how much (0 baked … 1 relit), y = exposure; the map's ambient and sun.
+uniform vec4 uUnbake;
+uniform vec3 uAmbient;
+uniform vec3 uSunCol;
+uniform vec3 uEye;
 uniform vec4 uLightPos[16]; // xyz, radius
 uniform vec3 uLightCol[16];
 layout(location = 0) out vec4 oColor;
@@ -167,6 +173,8 @@ float in_shadow(vec3 p, float bias) {
 void main() {
     // (Before any discard: derivatives need every pixel of the quad.)
     float bumped = uKind == 2 && uBump.x > 0.0 ? bump_light(vUv) : 1.0;
+    vec3 faceN = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+    if (dot(faceN, uEye - vWorld) < 0.0) faceN = -faceN;       // (the side that is seen)
     vec4 t = texture(uTex, vUv);
     vec4 c = t * vColor;
     if (c.a < uAlphaRef) discard;
@@ -175,10 +183,20 @@ void main() {
     c = clamp(c, 0.0, 1.0);
     if (uKind >= 2) {
         c.rgb *= bumped;
+        float sh = uShadowParams.y > 0.5 ? in_shadow(vWorld, uKind == 3 ? 0.004 : 0.0008) : 0.0;
         if (uShadowParams.y > 0.5) {
             float lum = dot(c.rgb, vec3(0.3, 0.59, 0.11));
             float k = uShadowParams.x * smoothstep(0.03, 0.3, lum) * (uKind == 3 ? uShadowParams.w : 1.0);
-            c.rgb *= 1.0 - k * in_shadow(vWorld, uKind == 3 ? 0.004 : 0.0008);
+            c.rgb *= 1.0 - k * sh;
+        }
+        if (uKind == 2 && uUnbake.x > 0.0) {
+            // The vertex colour without its brightness: the surface's own tint.
+            float top = max(vColor.r, max(vColor.g, vColor.b));
+            vec3 tint = vColor.rgb / max(top, 0.04);
+            float ndl = max(dot(faceN, normalize(uSunDir.xyz)), 0.0);
+            vec3 light = uAmbient + uSunCol * ndl * (1.0 - sh);
+            vec3 relit = clamp(t.rgb * tint * light * uUnbake.y, 0.0, 1.0) * bumped;
+            c.rgb = mix(c.rgb, relit, uUnbake.x);
         }
         if (uKind == 2)
             for (int i = 0; i < uLights; i++) {
@@ -272,8 +290,9 @@ struct Cmd {
 // modern lighting.
 struct WorldView {
     bool set = false;
-    bool ambience = false, indoors = false;
+    bool ambience = false, indoors = false, night = false;
     float wind[3] = {}, focus[3] = {};
+    float ambient[3] = {1, 1, 1};
     float view[16], proj[16], sun[3], sunColour[3];
     std::vector<float> lights;          // n × {x, y, z, radius, r, g, b, 0}
 };
@@ -424,7 +443,7 @@ static void size_frame() {
 //     pixels are blurred into a glow, and a grade is laid over the picture.
 static hal::gs::Lighting s_light;
 static bool  s_litFrame = false;        // this play: the world's lights are known
-static GLint s_uSunDir = -1, s_uBump = -1, s_uCutout = -1, s_uKind = -1, s_uShadowMat = -1, s_uShadowParams = -1, s_uLights = -1, s_uLightPos = -1, s_uLightCol = -1;
+static GLint s_uUnbake = -1, s_uAmbient = -1, s_uSunCol = -1, s_uEye = -1, s_uSunDir = -1, s_uBump = -1, s_uCutout = -1, s_uKind = -1, s_uShadowMat = -1, s_uShadowParams = -1, s_uLights = -1, s_uLightPos = -1, s_uLightCol = -1;
 static GLuint s_programShadow = 0, s_shadowFbo = 0, s_shadowTex = 0, s_noShadowTex = 0;
 static GLint s_uShadowMvp = -1;
 static int s_shadowAlloc = 0;
@@ -759,6 +778,22 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
     glUniformMatrix4fv(s_uShadowMat, 1, GL_FALSE, m);
     glUniform4f(s_uSunDir, f.world.sun[0], f.world.sun[1], f.world.sun[2], sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun);
     glUniform4f(s_uBump, s_light.bump, s_light.bumpDepth, 0.0f, 0.0f);
+    {
+        // Only by day and out of doors: a night map's painted light holds its
+        // lanterns' pools (relit, the night went flat and bright — its light
+        // numbers are the day's), and interiors have no sun to speak of.
+        const float share = f.world.ambience && !f.world.indoors && !f.world.night ? 1.0f : 0.0f;
+        glUniform4f(s_uUnbake, s_light.unbake * share, s_light.unbakeExposure, 0.0f, 0.0f);
+    }
+    glUniform3fv(s_uAmbient, 1, f.world.ambient);
+    glUniform3fv(s_uSunCol, 1, f.world.sunColour);
+    {
+        const float* v = f.world.view;
+        float eye[3];
+        for (int k = 0; k < 3; k++)
+            eye[k] = -(v[12] * v[k * 4] + v[13] * v[k * 4 + 1] + v[14] * v[k * 4 + 2]);
+        glUniform3fv(s_uEye, 1, eye);
+    }
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, shadows ? s_shadowTex : s_noShadowTex);
     glActiveTexture(GL_TEXTURE0);
@@ -1627,6 +1662,10 @@ void init(int width, int height, const char* title) {
     s_uShadowParams = glGetUniformLocation(s_program3d, "uShadowParams");
     s_uSunDir = glGetUniformLocation(s_program3d, "uSunDir");
     s_uBump = glGetUniformLocation(s_program3d, "uBump");
+    s_uUnbake = glGetUniformLocation(s_program3d, "uUnbake");
+    s_uAmbient = glGetUniformLocation(s_program3d, "uAmbient");
+    s_uSunCol = glGetUniformLocation(s_program3d, "uSunCol");
+    s_uEye = glGetUniformLocation(s_program3d, "uEye");
     s_uLights = glGetUniformLocation(s_program3d, "uLights");
     s_uLightPos = glGetUniformLocation(s_program3d, "uLightPos");
     s_uLightCol = glGetUniformLocation(s_program3d, "uLightCol");
@@ -2100,8 +2139,10 @@ bool toggle_lighting() {
     return !s_lightingHeld;
 }
 void set_world(const float* view, const float* proj, const float* sunDir, const float* sunColour,
-               const float* lights, int n) {
+               const float* lights, int n, const float* ambient) {
     WorldView& w = s_cur.world;
+    if (ambient != nullptr)
+        memcpy(w.ambient, ambient, sizeof w.ambient);
     w.set = true;
     memcpy(w.view, view, sizeof w.view);
     memcpy(w.proj, proj, sizeof w.proj);
@@ -2110,10 +2151,11 @@ void set_world(const float* view, const float* proj, const float* sunDir, const 
     w.lights.assign(lights, lights + (size_t)(n > 0 ? n : 0) * 8);
 }
 void world_post() { push(Op::Post); }
-void set_ambience(const float* wind, const float* focus, bool indoors) {
+void set_ambience(const float* wind, const float* focus, bool indoors, bool night) {
     WorldView& w = s_cur.world;
     w.ambience = true;
     w.indoors = indoors;
+    w.night = night;
     memcpy(w.wind, wind, sizeof w.wind);
     memcpy(w.focus, focus, sizeof w.focus);
 }

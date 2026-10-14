@@ -50,6 +50,8 @@ int wots2_mod_init(const Wots2Api* api) {
         api->set_bump(bump, number("bump_depth", 4.0f));
     if (api->version >= 3 && api->set_dust)
         api->set_dust(number("dust", 1.0f));
+    if (api->version >= 4 && api->set_unbake)
+        api->set_unbake(number("unbake", 0.0f), number("unbake_exposure", 0.44f));
     api->log(api, "shadows %s (the map's too: %s), ambient occlusion %s, lanterns %s, bloom %.2f, grade %s",
              l.shadows ? "on" : "off", mapShadows ? "yes" : "no", l.ao ? "on" : "off", l.lanterns ? "on" : "off", l.bloom, l.grade ? "on" : "off");
     return 0;

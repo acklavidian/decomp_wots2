@@ -138,7 +138,9 @@ struct Lighting {
     bool  mapShadows = false;       // the map's own geometry casts them too (its lighting is baked)
     float bump = 0.0f;              // bump mapping of the map's surfaces, heights from brightness: 0 = off
     float bumpDepth = 4.0f;         // how steep a step of brightness is
-    float dust = 0.0f;              // wind and dust: motes in the air, dust swept up by gusts; 0 = off
+    float dust = 0.0f;
+    float unbake = 0.0f;            // the map relit (ambient + sun + real shadows) instead of its baked light: 0 … 1
+    float unbakeExposure = 0.44f;    // brightness of the relit map              // wind and dust: motes in the air, dust swept up by gusts; 0 = off
     float shadowStrength = 0.55f;
     int   shadowSize = 2048;        // texels each way
     float shadowReach = 16.0f;      // units from the middle of the view each way
@@ -160,11 +162,12 @@ bool     lighting_held();       // F3 has it held back
 // camera→clip matrices (row-vector convention), the direction towards the
 // sun and its colour, and the point lights: n × {x, y, z, radius, r, g, b, 0}.
 void set_world(const float* view, const float* proj, const float* sunDir, const float* sunColour,
-               const float* lights, int n);
+               const float* lights, int n,
+               const float* ambient = nullptr);
 // What the wind and dust need of a world frame (MapState_Draw): the game's
 // wind (the gust vector it gives cloth and smoke), where the player is, and
 // whether this is an interior.
-void set_ambience(const float* wind, const float* focus, bool indoors);
+void set_ambience(const float* wind, const float* focus, bool indoors, bool night = false);
 // The world is drawn (World_Draw, before the HUD): ambient occlusion, bloom
 // and the grade are applied here.
 void world_post();

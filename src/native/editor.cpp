@@ -1119,6 +1119,10 @@ void lighting_panel() {
         ImGui::SliderFloat("Strength##bump", &l.bump, 0.0f, 3.0f, l.bump > 0.0f ? "%.2f" : "off");
         ImGui::SliderFloat("Depth", &l.bumpDepth, 0.5f, 12.0f);
     }
+    if (ImGui::CollapsingHeader("Un-bake the map's light", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Relit", &l.unbake, 0.0f, 1.0f, l.unbake > 0.0f ? "%.2f" : "baked");
+        ImGui::SliderFloat("Exposure", &l.unbakeExposure, 0.1f, 1.5f);
+    }
     if (ImGui::CollapsingHeader("Wind and dust", ImGuiTreeNodeFlags_DefaultOpen))
         ImGui::SliderFloat("Dust", &l.dust, 0.0f, 3.0f, l.dust > 0.0f ? "%.2f" : "off");
     if (ImGui::CollapsingHeader("Ambient occlusion", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1156,6 +1160,8 @@ void lighting_panel() {
                 {"bump", num(l.bump)},
                 {"bump_depth", num(l.bumpDepth)},
                 {"dust", num(l.dust)},
+                {"unbake", num(l.unbake)},
+                {"unbake_exposure", num(l.unbakeExposure)},
                 {"ao", l.ao ? "1" : "0"},
                 {"ao_strength", num(l.aoStrength)},
                 {"ao_radius", num(l.aoRadius)},
