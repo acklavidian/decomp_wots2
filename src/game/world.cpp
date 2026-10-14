@@ -499,6 +499,7 @@ void World_PlacePlayer(World* self, int exit) {
 }
 
 extern "C" void Native_WorldPost();
+extern "C" int Native_PhotoHideHud();      // native/editor.cpp: photo mode without the HUD
 
 // ── 0x1DD530 ──────────────────────────────────────────────────────────────
 int World_Draw(World* self) {
@@ -533,7 +534,7 @@ int World_Draw(World* self) {
     Native_WorldPost();         // native: the modern lighting, if a mod asked for it
     if (self->dayEnding != 0)
         GsDevice_ClearScreenColor(*gGsDevice, (u32)(u8)self->dayEndFade << 24);
-    if (self->hideHud == 0) {
+    if (self->hideHud == 0 && !Native_PhotoHideHud()) {
         Hud_Draw(*gHud);
         Effects_Draw(P(self->effects));
     }

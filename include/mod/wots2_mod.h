@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define WOTS2_MOD_API_VERSION 4      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust; 4: set_unbake */
+#define WOTS2_MOD_API_VERSION 5      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust; 4: set_unbake; 5: set_model_shadow */
 
 /* What of the picture a mod may change (see include/hal/gs.h, Video). */
 typedef struct Wots2Video {
@@ -109,6 +109,9 @@ struct Wots2Api {
      * instead of the light painted into it: 0 = baked … 1 = relit; exposure
      * its brightness (0.44).  By day and out of doors only. */
     void (*set_unbake)(float amount, float exposure);
+    /* Version 5: how dark the sun's shadow falls on characters and things,
+     * against on the map (0.6; 1 = as dark as the map's). */
+    void (*set_model_shadow)(float share);
 };
 
 /* Exported by the mod.  0 = loaded; anything else: the mod is left out. */

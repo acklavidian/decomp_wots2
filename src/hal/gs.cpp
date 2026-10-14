@@ -558,10 +558,36 @@ uniform sampler2D uColor, uAoT, uBloom, uDistT;
 uniform vec2 uAoTexel;
 uniform vec4 uOn;           // ao, bloom strength, grade, the frame's width / height
 uniform vec4 uGrade;        // contrast, saturation, warmth, vignette
+uniform vec4 uDof;          // strength (0 off), focus distance (0: the middle's), the frame's height
+// Depth of field (photo mode): a disc of samples as wide as how far this
+// pixel is from the distance in focus; a sample nearer than the focus is
+// let spread over what is behind it, one behind is not let bleed forward.
+vec3 dof(vec3 c, float z) {
+    float focus = uDof.y > 0.0 ? uDof.y : texture(uDistT, vec2(0.5)).r;
+    focus = min(focus, 300.0);
+    float radius = clamp(abs(z - focus) / max(focus, 0.5), 0.0, 1.0) * uDof.x * uDof.z * 0.012;
+    if (radius < 0.5)
+        return c;
+    vec2 px = 1.0 / vec2(textureSize(uColor, 0));
+    vec3 sum = c;
+    float weight = 1.0;
+    for (int i = 0; i < 24; i++) {
+        float a = float(i) * 2.39996, r = sqrt((float(i) + 0.5) / 24.0) * radius;
+        vec2 uv = vUv + vec2(cos(a), sin(a)) * r * px;
+        float zs = texture(uDistT, uv).r;
+        float w = zs < z ? clamp(abs(zs - focus) / max(focus, 0.5) * uDof.x * uDof.z * 0.012 / max(r, 1.0), 0.0, 1.0)
+                         : 1.0;
+        sum += texture(uColor, uv).rgb * w;
+        weight += w;
+    }
+    return sum / weight;
+}
 void main() {
     vec4 frame = texture(uColor, vUv);
     vec3 c = frame.rgb;
     float z = texture(uDistT, vUv).r;
+    if (uDof.x > 0.0)
+        c = dof(c, min(z, 1e4));
     if (uOn.x > 0.5 && z < 1e8) {
         // (The occlusion was made at half size and is noisy: a blur that
         // keeps to surfaces at about the same distance.)
@@ -622,7 +648,8 @@ static GLuint colour_target(GLuint& fbo, GLuint& tex, int w, int h, GLenum forma
 }
 static bool s_lightingHeld = false;     // F3
 static bool lighting_wanted() {
-    return !s_lightingHeld && (s_light.shadows || s_light.ao || s_light.lanterns || s_light.bloom > 0.0f || s_light.grade);
+    return !s_lightingHeld && (s_light.shadows || s_light.ao || s_light.lanterns || s_light.bloom > 0.0f || s_light.grade ||
+                               s_light.dof > 0.0f);
 }
 static void lighting_init() {
     if (s_programShadow != 0)
@@ -743,7 +770,7 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
     if (!s_litFrame)
         return;
     lighting_init();
-    if (s_light.ao) {
+    if (s_light.ao || s_light.dof > 0.0f) {
         // The distance buffer: made on first use, the frame's size, beside
         // the colour (it is cleared with the frame and written by the
         // world's 3D views only — see dist_buffers).
@@ -774,7 +801,8 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
     glUseProgram(s_program3d);
     const float sun = f.world.sunColour[0] * 0.3f + f.world.sunColour[1] * 0.59f + f.world.sunColour[2] * 0.11f;
     glUniform4f(s_uShadowParams, s_light.shadowStrength * (sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun),
-                shadows ? 1.0f : 0.0f, 1.0f / (float)s_light.shadowSize, 0.6f);
+                shadows ? 1.0f : 0.0f, 1.0f / (float)s_light.shadowSize,
+                s_light.modelShadow);
     glUniformMatrix4fv(s_uShadowMat, 1, GL_FALSE, m);
     glUniform4f(s_uSunDir, f.world.sun[0], f.world.sun[1], f.world.sun[2], sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun);
     glUniform4f(s_uBump, s_light.bump, s_light.bumpDepth, 0.0f, 0.0f);
@@ -845,6 +873,8 @@ struct Mote { float p[3], v[3], age, life, size, seed; int kind; };
 static std::vector<Mote> s_motes;
 static GLuint s_dotTex = 0;
 static double s_dustClock = -1.0;
+static bool s_frozen = false;       // photo mode: the game is held still
+static std::string s_picturePath;   // photo mode: a picture asked for
 static u32 s_dustRand = 12345;
 static float frand(float a, float b) {
     s_dustRand = s_dustRand * 1664525u + 1013904223u;
@@ -868,7 +898,7 @@ static void dust_pass(const Frame& f, const Frame* before, float t) {
             m[k] = mix(before->cmds[(size_t)view.match].f[k], m[k], t);
     // The clock: game frames (30 a second), with the in-between's share.
     const double clock = (double)f.number - 1.0 + (double)t;
-    float dt = s_dustClock < 0.0 ? 0.0f : (float)((clock - s_dustClock) / 30.0);
+    float dt = s_dustClock < 0.0 || s_frozen ? 0.0f : (float)((clock - s_dustClock) / 30.0);
     s_dustClock = clock;
     dt = dt < 0.0f ? 0.0f : dt > 0.1f ? 0.1f : dt;
 
@@ -986,7 +1016,7 @@ static void dust_pass(const Frame& f, const Frame* before, float t) {
 }
 
 static void post_pass(const Frame& f) {
-    if (!(s_light.ao || s_light.bloom > 0.0f || s_light.grade))
+    if (!(s_light.ao || s_light.bloom > 0.0f || s_light.grade || s_light.dof > 0.0f))
         return;
     const int W = s_physW, H = s_physH, hw = (W + 1) / 2, hh = (H + 1) / 2;
     if (s_postW != W || s_postH != H) {
@@ -1063,6 +1093,7 @@ static void post_pass(const Frame& f) {
                 s_light.grade ? 1.0f : 0.0f, (float)W / (float)H);
     glUniform4f(glGetUniformLocation(s_pComp, "uGrade"), s_light.contrast, s_light.saturation, s_light.warmth,
                 s_light.vignette);
+    glUniform4f(glGetUniformLocation(s_pComp, "uDof"), s_writeDist ? s_light.dof : 0.0f, s_light.dofFocus, (float)H, 0.0f);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, s_shadowTex != 0 ? s_shadowTex : s_noShadowTex);
@@ -1554,6 +1585,14 @@ void set_video(const Video& video) {
     s_video = video;
     apply_window();
 }
+void save_picture(const char* path) { s_picturePath = path; }
+void set_frozen(bool frozen) { s_frozen = frozen; }
+void set_rate(int fps, bool vsync) {
+    s_video.fps = fps;
+    s_video.vsync = vsync;
+    if (s_window != nullptr)
+        SDL_GL_SetSwapInterval(getenv("WOTS2_FAST") || !vsync ? 0 : 1);
+}
 Video video() { return s_video; }
 void toggle_fullscreen() {
     s_video.fullscreen = !s_video.fullscreen;
@@ -1728,6 +1767,65 @@ void begin_frame() {
     s_recOwner = -1;
 }
 
+// A PNG without compression (stored deflate blocks): no image library needed.
+static u32 crc32_of(const u8* p, size_t n, u32 crc = 0) {
+    static u32 table[256];
+    if (table[1] == 0)
+        for (u32 i = 0; i < 256; i++) {
+            u32 c = i;
+            for (int k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[i] = c;
+        }
+    crc = ~crc;
+    for (size_t i = 0; i < n; i++) crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+    return ~crc;
+}
+static bool write_png(const char* path, const u8* rgb, int w, int h) {
+    std::vector<u8> raw;
+    raw.reserve((size_t)(w * 3 + 1) * h);
+    for (int y = 0; y < h; y++) {
+        raw.push_back(0);
+        raw.insert(raw.end(), rgb + (size_t)y * w * 3, rgb + (size_t)(y + 1) * w * 3);
+    }
+    std::vector<u8> z = {0x78, 0x01};
+    u32 a = 1, b = 0;
+    for (u8 v : raw) { a = (a + v) % 65521; b = (b + a) % 65521; }
+    for (size_t at = 0; at < raw.size() || at == 0; ) {
+        const size_t n = std::min<size_t>(65535, raw.size() - at);
+        z.push_back(at + n >= raw.size() ? 1 : 0);
+        z.push_back((u8)n); z.push_back((u8)(n >> 8));
+        z.push_back((u8)~n); z.push_back((u8)(~n >> 8));
+        z.insert(z.end(), raw.begin() + (long)at, raw.begin() + (long)(at + n));
+        at += n;
+        if (n == 0) break;
+    }
+    const u32 adler = b << 16 | a;
+    for (int k = 3; k >= 0; k--) z.push_back((u8)(adler >> (k * 8)));
+    FILE* f = fopen(path, "wb");
+    if (f == nullptr)
+        return false;
+    const auto be = [](u8* o, u32 v) { o[0] = (u8)(v >> 24); o[1] = (u8)(v >> 16); o[2] = (u8)(v >> 8); o[3] = (u8)v; };
+    const auto chunk = [&](const char* type, const u8* data, size_t n) {
+        u8 head[8];
+        be(head, (u32)n);
+        memcpy(head + 4, type, 4);
+        fwrite(head, 1, 8, f);
+        if (n) fwrite(data, 1, n, f);
+        u8 crc[4];
+        be(crc, crc32_of(data, n, crc32_of(head + 4, 4)));
+        fwrite(crc, 1, 4, f);
+    };
+    static const u8 sig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    fwrite(sig, 1, 8, f);
+    u8 ihdr[13];
+    be(ihdr, (u32)w);
+    be(ihdr + 4, (u32)h);
+    ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = ihdr[11] = ihdr[12] = 0;
+    chunk("IHDR", ihdr, 13);
+    chunk("IDAT", z.data(), z.size());
+    chunk("IEND", nullptr, 0);
+    return fclose(f) == 0;
+}
 static void write_shot(const char* name) {
     const int w = s_physW, h = s_physH;
     std::vector<u8> px((size_t)w * h * 3);
@@ -1766,6 +1864,17 @@ static void parse_frame_hooks() {
         s_exitFrame = atoi(e);
 }
 static void debug_frame_hooks() {
+    if (!s_picturePath.empty()) {       // photo mode: the frame without the overlay
+        const int w = s_physW, h = s_physH;
+        std::vector<u8> px((size_t)w * h * 3);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+        printf("[photo] %s %s\n", write_png(s_picturePath.c_str(), px.data(), w, h) ? "saved" : "could not write",
+               s_picturePath.c_str());
+        fflush(stdout);
+        s_picturePath.clear();
+    }
     parse_frame_hooks();
     if (s_shots.count(s_frame)) {
         char name[64];

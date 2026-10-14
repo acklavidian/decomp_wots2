@@ -40,6 +40,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <ctime>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -80,6 +81,15 @@ enum Mode { kObjects, kCells, kPoints };
 bool sReady = false;        // ImGui set up
 bool sOpen = false;
 bool sLightOpen = false;    // the lighting panel (F5)
+// Photo mode (F7): the game held still, the HUD away, a free camera.
+bool  sPhoto = false;
+bool  sPhotoHideHud = true;
+float sPhotoFov = 49.9f;            // degrees, top to bottom (the game's own: 49.9)
+float sPhotoRoll = 0.0f;            // degrees
+float sPhotoDof = 0.0f;
+bool  sPhotoDofAuto = true;
+float sPhotoFocus = 5.0f;
+std::string sPhotoMsg;
 std::string sLightSaved;    // what the last save said
 bool sPause = true;
 int  sMode = kObjects;
@@ -1037,9 +1047,10 @@ const int kQualitySize[] = {1024, 2048, 4096};
 
 int quality_of(int size) { return size <= 1024 ? 0 : size <= 2048 ? 1 : 2; }
 
-// Writes `values` into the [settings] of an ini, keeping its comments and
-// order; keys it does not have yet go at the end of that section.
-bool save_settings(const std::string& path, const std::vector<std::pair<std::string, std::string>>& values) {
+// Writes `values` into a section of an ini ([settings] unless said), keeping
+// its comments and order; keys it does not have yet go at the end of that section.
+bool save_settings(const std::string& path, const std::vector<std::pair<std::string, std::string>>& values,
+                   const char* wanted = "settings") {
     std::ifstream in(path);
     if (!in)
         return false;
@@ -1057,7 +1068,7 @@ bool save_settings(const std::string& path, const std::vector<std::pair<std::str
             section = t.substr(1, t.find(']') - 1);
             continue;
         }
-        if (section != "settings" || t.empty() || t[0] == ';' || t[0] == '#')
+        if (section != wanted || t.empty() || t[0] == ';' || t[0] == '#')
             continue;
         settingsEnd = (int)i;
         const size_t eq = t.find('=');
@@ -1077,7 +1088,7 @@ bool save_settings(const std::string& path, const std::vector<std::pair<std::str
             extra.push_back(values[k].first + " = " + values[k].second);
     if (!extra.empty()) {
         if (settingsEnd < 0) {
-            lines.push_back("[settings]");
+            lines.push_back(std::string("[") + wanted + "]");
             settingsEnd = (int)lines.size() - 1;
         }
         lines.insert(lines.begin() + settingsEnd + 1, extra.begin(), extra.end());
@@ -1094,14 +1105,66 @@ std::string num(float v) {
     return buf;
 }
 
+// The FPS unlock (F6, and the panel): off is the game's own 30 pictures a
+// second; on again is whatever rate was asked for before.
+int sFpsWhenOn = -1;            // < 0 the display's rate
+const char* const kRates[] = {"Display", "60", "90", "120", "144", "240"};
+const int kRateValue[] = {-1, 60, 90, 120, 144, 240};
+
+void set_fps(int fps) { hal::gs::set_rate(fps, hal::gs::video().vsync); }
+
+std::string sFpsSaved;
+
+void fps_section() {
+    if (!ImGui::CollapsingHeader("FPS unlock", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+    hal::gs::Video v = hal::gs::video();
+    if (v.fps != 0)
+        sFpsWhenOn = v.fps;
+    bool on = v.fps != 0;
+    if (ImGui::Checkbox("On (F6)", &on))
+        set_fps(on ? sFpsWhenOn : 0);
+    int rate = 0;
+    for (int i = 0; i < 6; i++)
+        if (kRateValue[i] == sFpsWhenOn) rate = i;
+    if (ImGui::Combo("Rate", &rate, kRates, 6)) {
+        sFpsWhenOn = kRateValue[rate];
+        if (on) set_fps(sFpsWhenOn);
+    }
+    bool vsync = v.vsync;
+    if (ImGui::Checkbox("Wait for the display (vsync)", &vsync))
+        hal::gs::set_rate(hal::gs::video().fps, vsync);
+    ImGui::TextDisabled("The game still runs at 30; the pictures in between are made up.");
+    const std::string dir = mods::dir_of("fps_unlock");
+    if (!dir.empty() && ImGui::Button("Save##fps")) {
+        const std::string path = dir + "/mod.ini";
+        char rateText[16];
+        if (sFpsWhenOn < 0) snprintf(rateText, sizeof rateText, "display");
+        else snprintf(rateText, sizeof rateText, "%d", sFpsWhenOn);
+        const bool ok = save_settings(path, {{"fps", rateText}, {"vsync", hal::gs::video().vsync ? "1" : "0"}}) &&
+                        save_settings(path, {{"enabled", hal::gs::video().fps != 0 ? "1" : "0"}}, "mod");
+        sFpsSaved = ok ? "Saved to " + path : "Could not write " + path;
+        printf("[fps] %s\n", sFpsSaved.c_str());
+    }
+    if (!dir.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("into the FPS unlock mod's mod.ini");
+    }
+    if (!sFpsSaved.empty())
+        ImGui::TextWrapped("%s", sFpsSaved.c_str());
+}
+
 void lighting_panel() {
     hal::gs::Lighting l = hal::gs::lighting();
     const hal::gs::Lighting before = l;
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Modern lighting (F5)", &sLightOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!ImGui::Begin("Graphics (F5)", &sLightOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
+    fps_section();
+    ImGui::Separator();
+    ImGui::Text("Modern lighting");
     bool on = !hal::gs::lighting_held();
     if (ImGui::Checkbox("On (F3)", &on))
         hal::gs::toggle_lighting();
@@ -1111,6 +1174,7 @@ void lighting_panel() {
         ImGui::Checkbox("Sun shadows", &l.shadows);
         ImGui::Checkbox("The map casts them too (carts, eaves, trees)", &l.mapShadows);
         ImGui::SliderFloat("Strength##shadow", &l.shadowStrength, 0.0f, 1.0f);
+        ImGui::SliderFloat("On characters", &l.modelShadow, 0.0f, 1.0f);
         int q = quality_of(l.shadowSize);
         if (ImGui::Combo("Quality", &q, kQuality, 3))
             l.shadowSize = kQualitySize[q];
@@ -1156,6 +1220,7 @@ void lighting_panel() {
                 {"shadows", l.shadows ? "1" : "0"},
                 {"map_shadows", l.mapShadows ? "1" : "0"},
                 {"shadow_strength", num(l.shadowStrength)},
+                {"character_shadow", num(l.modelShadow)},
                 {"shadow_quality", kQuality[quality_of(l.shadowSize)]},
                 {"bump", num(l.bump)},
                 {"bump_depth", num(l.bumpDepth)},
@@ -1204,21 +1269,113 @@ void editor_panels() {
     }
 }
 
+void take_picture() {
+    std::error_code ec;
+    std::filesystem::create_directories("screenshots", ec);
+    char name[64];
+    const std::time_t now = std::time(nullptr);
+    std::strftime(name, sizeof name, "screenshots/wots2_%Y%m%d_%H%M%S.png", std::localtime(&now));
+    std::string path = name;
+    for (int n = 2; std::filesystem::exists(path); n++)     // (two in one second)
+        path = std::string(name, strlen(name) - 4) + "_" + std::to_string(n) + ".png";
+    hal::gs::save_picture(path.c_str());
+    sPhotoMsg = "Saved " + (std::filesystem::current_path(ec) / path).string();
+}
+
+void apply_dof() {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.dof = sPhoto ? sPhotoDof : 0.0f;
+    l.dofFocus = sPhotoDofAuto ? 0.0f : sPhotoFocus;
+    hal::gs::set_lighting(l);
+}
+
+void photo_panel() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (!io.WantCaptureMouse && io.MouseWheel != 0.0f)
+        sPhotoFov = std::clamp(sPhotoFov - io.MouseWheel * 3.0f, 5.0f, 110.0f);
+    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Photo mode (F7)", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::TextDisabled("Right mouse: look   WASD / Q E: fly (Shift: faster)");
+    ImGui::TextDisabled("Wheel: zoom   F12: take the picture   Esc / F7: back");
+    ImGui::Checkbox("Hide the HUD", &sPhotoHideHud);
+    ImGui::SliderFloat("Field of view", &sPhotoFov, 5.0f, 110.0f, "%.0f deg");
+    ImGui::SliderFloat("Roll", &sPhotoRoll, -45.0f, 45.0f, "%.0f deg");
+    ImGui::SliderFloat("Speed", &sSpeed, 0.5f, 30.0f, "%.1f");
+    bool changed = ImGui::SliderFloat("Depth of field", &sPhotoDof, 0.0f, 1.0f, sPhotoDof > 0.0f ? "%.2f" : "off");
+    if (sPhotoDof > 0.0f) {
+        changed |= ImGui::Checkbox("Focus on the middle of the picture", &sPhotoDofAuto);
+        if (!sPhotoDofAuto)
+            changed |= ImGui::SliderFloat("Focus distance", &sPhotoFocus, 0.5f, 60.0f, "%.1f");
+        if (hal::gs::lighting_held())
+            ImGui::TextDisabled("(Depth of field needs the modern lighting on: F3.)");
+    }
+    if (changed)
+        apply_dof();
+    if (ImGui::Button("Take the picture (F12)"))
+        take_picture();
+    if (ImGui::Button("Reset the view")) {
+        sPhotoFov = 49.9f;
+        sPhotoRoll = 0.0f;
+    }
+    if (!sPhotoMsg.empty())
+        ImGui::TextWrapped("%s", sPhotoMsg.c_str());
+    ImGui::End();
+}
+
 void close_lighting();
+void ensure_imgui();
+void overlay();
+
+void open_photo() {
+    EditorMap map;
+    if (sOpen || !Editor_CurrentMap(&map)) {
+        printf("[photo] F7: only in the world (and not with the level editor open)\n");
+        return;
+    }
+    ensure_imgui();
+    memcpy(sEye, map.eye, sizeof sEye);
+    const float len = sqrtf(map.dir[0] * map.dir[0] + map.dir[1] * map.dir[1] + map.dir[2] * map.dir[2]);
+    const float d[3] = {map.dir[0] / (len > 0 ? len : 1), map.dir[1] / (len > 0 ? len : 1), map.dir[2] / (len > 0 ? len : 1)};
+    sYaw = atan2f(-d[0], -d[2]);
+    sPitch = asinf(std::clamp(d[1], -1.0f, 1.0f));
+    sCamSet = true;
+    sPhoto = true;
+    sPhotoMsg.clear();
+    hal::pad::set_blocked(true);
+    hal::gs::set_frozen(true);
+    hal::gs::set_overlay(overlay);
+    apply_dof();
+    SDL_ShowCursor(SDL_ENABLE);
+    printf("[photo] on\n");
+}
+void close_photo() {
+    sPhoto = false;
+    sCamSet = false;
+    hal::pad::set_blocked(false);
+    hal::gs::set_frozen(false);
+    apply_dof();
+    if (!sLightOpen)
+        hal::gs::set_overlay(nullptr);
+    printf("[photo] off\n");
+}
 
 void overlay() {
-    if (!sOpen && !sLightOpen)
+    if (!sOpen && !sLightOpen && !sPhoto)
         return;
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
     if (sOpen)
         editor_panels();
+    if (sPhoto) {
+        fly();
+        photo_panel();
+    }
     if (sLightOpen)
         lighting_panel();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    if (!sLightOpen && !sOpen)          // (closed with its window's ×)
+    if (!sLightOpen && !sOpen && !sPhoto)   // (closed with its window's ×)
         close_lighting();
 }
 
@@ -1243,7 +1400,7 @@ void open_lighting() {
 }
 void close_lighting() {
     sLightOpen = false;
-    if (!sOpen)
+    if (!sOpen && !sPhoto)
         hal::gs::set_overlay(nullptr);
 }
 
@@ -1274,7 +1431,7 @@ void close_editor() {
     sCamSet = false;
     sDragging = false;
     hal::pad::set_blocked(false);
-    if (!sLightOpen)
+    if (!sLightOpen && !sPhoto)
         hal::gs::set_overlay(nullptr);
     if (sLevel.iomDirty || sLevel.colDirty)
         printf("[editor] closed with edits not saved (they stay until the map is loaded again)\n");
@@ -1291,10 +1448,48 @@ bool event(const SDL_Event& ev) {
         else open_editor();
         return true;
     }
+    if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F6) {
+        const hal::gs::Video v = hal::gs::video();
+        if (v.fps != 0) sFpsWhenOn = v.fps;
+        set_fps(v.fps != 0 ? 0 : sFpsWhenOn);
+        if (hal::gs::video().fps == 0) printf("[fps] FPS unlock off (the game's own 30)\n");
+        else if (hal::gs::video().fps < 0) printf("[fps] FPS unlock on (the display's rate)\n");
+        else printf("[fps] FPS unlock on (%d)\n", hal::gs::video().fps);
+        return true;
+    }
     if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F5) {
         if (sLightOpen) close_lighting();
         else open_lighting();
         return true;
+    }
+    if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F7) {
+        if (sPhoto) close_photo();
+        else open_photo();
+        return true;
+    }
+    if (sPhoto) {
+        // Photo mode: the game is held and the pad blocked; the panel and the
+        // flying have the keyboard and the mouse.
+        ImGui_ImplSDL2_ProcessEvent(&ev);
+        switch (ev.type) {
+        case SDL_QUIT:
+            return false;
+        case SDL_KEYDOWN:
+            if (ev.key.keysym.sym == SDLK_F11)
+                return false;
+            if (ev.key.keysym.sym == SDLK_ESCAPE && !ImGui::GetIO().WantCaptureKeyboard) {
+                close_photo();
+                return true;
+            }
+            if (ev.key.keysym.sym == SDLK_F12 && ev.key.repeat == 0)
+                take_picture();
+            return true;
+        case SDL_KEYUP: case SDL_TEXTINPUT: case SDL_MOUSEMOTION: case SDL_MOUSEBUTTONDOWN:
+        case SDL_MOUSEBUTTONUP: case SDL_MOUSEWHEEL:
+            return true;
+        default:
+            return false;
+        }
     }
     if (!sOpen && sLightOpen) {
         // The lighting panel alone: the game goes on, and has whatever the
@@ -1341,7 +1536,7 @@ bool event(const SDL_Event& ev) {
 }  // namespace editor
 
 bool Editor_Camera(float eye[3], float dir[3], float up[3]) {
-    if (!sOpen || !sCamSet)
+    if (!(sOpen || sPhoto) || !sCamSet)
         return false;
     memcpy(eye, sEye, sizeof sEye);
     dir[0] = -sinf(sYaw) * cosf(sPitch);
@@ -1350,7 +1545,25 @@ bool Editor_Camera(float eye[3], float dir[3], float up[3]) {
     up[0] = 0;
     up[1] = 1;
     up[2] = 0;
+    if (sPhoto && sPhotoRoll != 0.0f) {
+        // Rolled about the way it looks: up turned towards the right.
+        const float right[3] = {cosf(sYaw), 0, -sinf(sYaw)};
+        const float u[3] = {right[1] * dir[2] - right[2] * dir[1], right[2] * dir[0] - right[0] * dir[2],
+                            right[0] * dir[1] - right[1] * dir[0]};
+        const float r = sPhotoRoll * 3.14159265f / 180.0f;
+        for (int k = 0; k < 3; k++)
+            up[k] = cosf(r) * u[k] + sinf(r) * right[k];
+    }
     return true;
 }
 
-extern "C" int Native_EditorPaused() { return sOpen && sPause ? 1 : 0; }
+float Editor_Zoom() {
+    if (!sPhoto)
+        return 0.0f;
+    const float base = 49.9f * 0.5f * 3.14159265f / 180.0f;
+    return tanf(base) / tanf(sPhotoFov * 0.5f * 3.14159265f / 180.0f);
+}
+
+extern "C" int Native_PhotoHideHud() { return sPhoto && sPhotoHideHud ? 1 : 0; }
+
+extern "C" int Native_EditorPaused() { return (sOpen && sPause) || sPhoto ? 1 : 0; }

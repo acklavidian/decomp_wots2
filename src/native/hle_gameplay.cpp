@@ -333,7 +333,9 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
     // NTSC; near plane 0.1.  Its far plane is 64, hidden by fog; there is no
     // fog here yet, so the native one is further out.
     const float zn = 0.1f, zf = 400.0f;
-    const float zoom = *guest::ptr<float>(0x2EDD30u) > 0 ? *guest::ptr<float>(0x2EDD30u) : 1.0f;    // (Camera.SetFOV)
+    float zoom = *guest::ptr<float>(0x2EDD30u) > 0 ? *guest::ptr<float>(0x2EDD30u) : 1.0f;    // (Camera.SetFOV)
+    if (Editor_Zoom() > 0.0f)
+        zoom = Editor_Zoom();               // (photo mode's field of view)
     const float proj[16] = {zoom * 512.0f / 320.0f, 0, 0, 0,  0, zoom * 512.0f * 0.94f / 224.0f, 0, 0,
                             0, 0, (zf + zn) / (zn - zf), -1,  0, 0, 2 * zf * zn / (zn - zf), 0};
     mul(view, proj, g_view.viewProj);

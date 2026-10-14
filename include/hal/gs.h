@@ -113,6 +113,12 @@ struct Video {
     bool  hudEdges = false; // a wider picture: the in-world HUD keeps to its edges, not to the 4:3 middle
 };
 void  set_video(const Video& video);
+// Only the rate and vsync (F6, the panel): the window is left where it is.
+void  set_rate(int fps, bool vsync);
+// Photo mode: the frame as the game drew it (no overlay) saved as a PNG at
+// the end of this frame; and "the game is held still" (the dust stops too).
+void  save_picture(const char* path);
+void  set_frozen(bool frozen);
 Video video();
 void  toggle_fullscreen();
 // How far (logical pixels) the picture now reaches beyond each side of the
@@ -136,11 +142,14 @@ void  set_full_width();
 struct Lighting {
     bool  shadows = false;
     bool  mapShadows = false;       // the map's own geometry casts them too (its lighting is baked)
+    float modelShadow = 0.6f;       // how dark the sun's shadow falls on characters and things, against the map's
     float bump = 0.0f;              // bump mapping of the map's surfaces, heights from brightness: 0 = off
     float bumpDepth = 4.0f;         // how steep a step of brightness is
     float dust = 0.0f;
     float unbake = 0.0f;            // the map relit (ambient + sun + real shadows) instead of its baked light: 0 … 1
-    float unbakeExposure = 0.44f;    // brightness of the relit map              // wind and dust: motes in the air, dust swept up by gusts; 0 = off
+    float unbakeExposure = 0.44f;    // brightness of the relit map
+    float dof = 0.0f;               // depth of field (photo mode): 0 = off, 1 = strong
+    float dofFocus = 0.0f;          // distance in focus; 0 = whatever is in the middle of the picture              // wind and dust: motes in the air, dust swept up by gusts; 0 = off
     float shadowStrength = 0.55f;
     int   shadowSize = 2048;        // texels each way
     float shadowReach = 16.0f;      // units from the middle of the view each way

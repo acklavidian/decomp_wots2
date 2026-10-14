@@ -39,3 +39,6 @@ bool Editor_CurrentMap(EditorMap* out);
 // ── src/native/editor.cpp ───────────────────────────────────────────────────
 // While the editor flies its own camera: its eye, the way it looks and up.
 bool Editor_Camera(float eye[3], float dir[3], float up[3]);
+// Photo mode's field of view: the zoom the map's projection multiplies by
+// (1 = the game's own), or 0 when photo mode is not on.
+float Editor_Zoom();
