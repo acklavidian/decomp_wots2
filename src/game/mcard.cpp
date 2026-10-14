@@ -2683,10 +2683,10 @@ void Mode1_Draw(void* self) {                           // 0x257000
 
 // Bound from hle::bind_all (the destructors are reached through the vtables).
 void McScreens_Bind() {
-    guest::bind(0x260E50, reinterpret_cast<void*>(Destroy), "Mode0_Dtor");
-    guest::bind(0x25FFB0, reinterpret_cast<void*>(Destroy), "SaveScreen_Dtor");
-    guest::bind(0x264D00, reinterpret_cast<void*>(Destroy), "McScreen_Dtor");
-    guest::bind(0x25DEE0, reinterpret_cast<void*>(Mode1_Dtor), "Mode1_Dtor");
+    guest::bind(0x260E50, Destroy, "Mode0_Dtor");
+    guest::bind(0x25FFB0, Destroy, "SaveScreen_Dtor");
+    guest::bind(0x264D00, Destroy, "McScreen_Dtor");
+    guest::bind(0x25DEE0, Mode1_Dtor, "Mode1_Dtor");
 }
 
 }  // extern "C"

@@ -106,7 +106,7 @@ Scene* AttractScene_Ctor(void* mem) {                   // 0x2BC060
 // Bound from hle::bind_all (nothing else refers to this file).
 void MovieScenes_Bind() {
     const auto bind = [](u32 address, auto fn, const char* name) {
-        guest::bind(address, reinterpret_cast<void*>(fn), name);
+        guest::bind(address, fn, name);
     };
     bind(0x2BBB30, StaffRollScene_Ctor, "StaffRollScene_Ctor");
     bind(0x2BBAD0, Movie_Destroy, "StaffRollScene_Destroy");

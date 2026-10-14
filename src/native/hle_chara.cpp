@@ -325,8 +325,8 @@ void hle_chara_enter_interior() {
 // Vtable slots of the two character classes that are not decompiled.
 void hle_chara_bind() {
     printf("[stub] characters: models are read and drawn by native code (lit by the map's lights)\n");
-    guest::bind(0x269B70, reinterpret_cast<void*>(player_step_map), "Chara_StepMap + debug hooks");
-    guest::bind(0x2692A0, reinterpret_cast<void*>(other_step_map), "Chara_StepMap + map edge");
+    guest::bind(0x269B70, player_step_map, "Chara_StepMap + debug hooks");
+    guest::bind(0x2692A0, other_step_map, "Chara_StepMap + map edge");
 }
 
 extern "C" {

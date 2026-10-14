@@ -2,7 +2,7 @@
 
 # 侍道2 — Way of the Samurai 2, native
 
-**The 2004 PS2 cult classic, decompiled and running as a real Linux program.**
+**The 2004 PS2 cult classic, decompiled and running as a real Linux and Windows program.**
 **No emulator. No interpreter. Widescreen, any resolution, any frame rate.**
 
 ![The first fight, 16:9, with the HUD at the edges](docs/mods_widescreen_native.png)
@@ -55,6 +55,13 @@ writes the game's memory every frame. The guide is [`mods/README.md`](mods/READM
 
 **You need your own copy of the game** — the NTSC-U disc, `SLUS-208.93`. Nothing
 from the disc is in this repository.
+
+**Prebuilt:** download the Linux or Windows package from
+[Releases](https://github.com/acklavidian/decomp_wots2/releases), unpack it, and
+start `wots2` / `wots2.exe`. The first time it asks for your disc image. Each
+package has a README.txt.
+
+**From source (Linux):**
 
 ```bash
 # 1. Dependencies (Debian / Ubuntu / Pop!_OS)
@@ -122,7 +129,8 @@ ending without a crash. It is not finished:
   original's VU1 code. It looks right; it is not bit-exact.
 - It has **not been compared side by side with the original** on real hardware
   or PCSX2 for timing, sound and feel.
-- Linux only, so far.
+- **Windows** builds have been tested under Wine, not yet on a real Windows
+  machine. macOS is not done yet.
 
 Found something that looks or plays wrong? That's the most useful thing you can
 report.

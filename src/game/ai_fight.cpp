@@ -885,20 +885,20 @@ extern "C" u32 AiHold_Create() {                                // 0x274410
 
 static const struct FightBinder {
     FightBinder() {
-        guest::bind(0x18E5D0, reinterpret_cast<void*>(Fight_Dtor), "Fight_Dtor");
-        guest::bind(0x18E5C0, reinterpret_cast<void*>(Fight_Start), "Fight_Start");
-        guest::bind(0x18E420, reinterpret_cast<void*>(Fight_Step), "Fight_Step");
-        guest::bind(0x18E260, reinterpret_cast<void*>(Fight_Result), "Fight_Result");
-        guest::bind(0x18E230, reinterpret_cast<void*>(Fight_End), "Fight_End");
-        guest::bind(0x26A0F0, reinterpret_cast<void*>(Wait_Dtor), "AiWait_Dtor");
-        guest::bind(0x26A0B0, reinterpret_cast<void*>(Wait_Start), "AiWait_Start");
-        guest::bind(0x26A030, reinterpret_cast<void*>(Wait_Turn), "AiWait_Turn");
-        guest::bind(0x269C50, reinterpret_cast<void*>(Wait_Step), "AiWait_Step");
-        guest::bind(0x269C40, reinterpret_cast<void*>(Wait_Zero), "AiWait_Zero");
-        guest::bind(0x2743B0, reinterpret_cast<void*>(Wait_Dtor), "AiHold_Dtor");
-        guest::bind(0x274390, reinterpret_cast<void*>(Hold_Start), "AiHold_Start");
-        guest::bind(0x274380, reinterpret_cast<void*>(Wait_Zero), "AiHold_Zero");
-        guest::bind(0x2742F0, reinterpret_cast<void*>(Hold_Step), "AiHold_Step");
-        guest::bind(0x2742E0, reinterpret_cast<void*>(Wait_Zero), "AiHold_Zero");
+        guest::bind(0x18E5D0, Fight_Dtor, "Fight_Dtor");
+        guest::bind(0x18E5C0, Fight_Start, "Fight_Start");
+        guest::bind(0x18E420, Fight_Step, "Fight_Step");
+        guest::bind(0x18E260, Fight_Result, "Fight_Result");
+        guest::bind(0x18E230, Fight_End, "Fight_End");
+        guest::bind(0x26A0F0, Wait_Dtor, "AiWait_Dtor");
+        guest::bind(0x26A0B0, Wait_Start, "AiWait_Start");
+        guest::bind(0x26A030, Wait_Turn, "AiWait_Turn");
+        guest::bind(0x269C50, Wait_Step, "AiWait_Step");
+        guest::bind(0x269C40, Wait_Zero, "AiWait_Zero");
+        guest::bind(0x2743B0, Wait_Dtor, "AiHold_Dtor");
+        guest::bind(0x274390, Hold_Start, "AiHold_Start");
+        guest::bind(0x274380, Wait_Zero, "AiHold_Zero");
+        guest::bind(0x2742F0, Hold_Step, "AiHold_Step");
+        guest::bind(0x2742E0, Wait_Zero, "AiHold_Zero");
     }
 } sFightBinder;

@@ -59,7 +59,7 @@ void note_once(const char* what) {
 u32 make_dtor_vtable(void (*dtor)(void*, int)) {
     u32* vt = static_cast<u32*>(guest::alloc(0x10));
     vt[2] = guest::fake_address();
-    guest::bind(vt[2], reinterpret_cast<void*>(dtor), "native");
+    guest::bind(vt[2], dtor, "native");
     return guest::addr(vt);
 }
 

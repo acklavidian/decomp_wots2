@@ -276,14 +276,14 @@ static std::string g_discRoot = "extracted";
 void set_disc_root(const char* root) { g_discRoot = root; }
 const std::string& disc_root() { return g_discRoot; }
 
-#define BIND(addr, fn) guest::bind(addr, reinterpret_cast<void*>(fn), #fn)
+#define BIND(addr, fn) guest::bind(addr, fn, #fn)
 
-static u32 make_vtable(void* destroy, void* start, void* update, void* draw,
-                       void* nextScene, void* nextId) {
+static u32 make_vtable(guest::Fn destroy, guest::Fn start, guest::Fn update, guest::Fn draw,
+                       guest::Fn nextScene, guest::Fn nextId) {
     u32* vt = static_cast<u32*>(guest::alloc(0x20));
-    void* slots[6] = {destroy, start, update, draw, nextScene, nextId};
+    const guest::Fn slots[6] = {destroy, start, update, draw, nextScene, nextId};
     for (int i = 0; i < 6; i++) {
-        if (!slots[i])
+        if (!slots[i].fn)
             continue;
         vt[2 + i] = guest::fake_address();
         guest::bind(vt[2 + i], slots[i], "native");
@@ -294,7 +294,7 @@ static u32 make_vtable(void* destroy, void* start, void* update, void* draw,
 template <int... Ids>
 static void bind_stub_ctors(const u32* ctors, std::integer_sequence<int, Ids...>) {
     ((guest::lookup(ctors[Ids]) ? void() :
-      guest::bind(ctors[Ids], reinterpret_cast<void*>(&StubScene_Ctor<Ids>), "StubScene_Ctor")), ...);
+      guest::bind(ctors[Ids], &StubScene_Ctor<Ids>, "StubScene_Ctor")), ...);
 }
 
 void bind_all() {
@@ -334,18 +334,18 @@ void bind_all() {
     BIND(0x2ADA00, GameplayScene_GetNextSceneId);
 
     // Everything else in the scene factory gets the placeholder.
-    g_stubSceneVtable = make_vtable(reinterpret_cast<void*>(StubScene_Destroy),
-                                    reinterpret_cast<void*>(StubScene_Start),
-                                    reinterpret_cast<void*>(StubScene_Update),
-                                    reinterpret_cast<void*>(StubScene_Draw),
-                                    reinterpret_cast<void*>(StubScene_GetNextScene),
-                                    reinterpret_cast<void*>(StubScene_GetNextSceneId));
-    g_stubStaffRollVtable = make_vtable(reinterpret_cast<void*>(StubScene_Destroy),
-                                        reinterpret_cast<void*>(StubScene_Start),
-                                        reinterpret_cast<void*>(StubScene_Update),
-                                        reinterpret_cast<void*>(StubScene_Draw),
-                                        reinterpret_cast<void*>(StubScene_GetNextScene),
-                                        reinterpret_cast<void*>(StubStaffRoll_GetNextSceneId));
+    g_stubSceneVtable = make_vtable(StubScene_Destroy,
+                                    StubScene_Start,
+                                    StubScene_Update,
+                                    StubScene_Draw,
+                                    StubScene_GetNextScene,
+                                    StubScene_GetNextSceneId);
+    g_stubStaffRollVtable = make_vtable(StubScene_Destroy,
+                                        StubScene_Start,
+                                        StubScene_Update,
+                                        StubScene_Draw,
+                                        StubScene_GetNextScene,
+                                        StubStaffRoll_GetNextSceneId);
     static const u32 kSceneCtors[kSceneCount] = {
         0x1DB8B0, 0x27DB30, 0x2802B0, 0x1DAEB0, 0x1DFC00, 0x1DA560, 0x1DF780, 0x1DB760,
         0x27D230, 0x27DE80, 0x1DBFA0, 0x1D94C0, 0x1DA400, 0x1DF980, 0x2B2230, 0x27F200,
@@ -353,7 +353,7 @@ void bind_all() {
         0x29A320, 0x2A3460, 0x2A61F0, 0x2BBB30, 0x2BBE80, 0x2BC060 };
     bind_stub_ctors(kSceneCtors, std::make_integer_sequence<int, kSceneCount>{});
 
-    g_modeObjVtable = make_vtable(reinterpret_cast<void*>(ModeObj_Destroy),
+    g_modeObjVtable = make_vtable(ModeObj_Destroy,
                                   nullptr, nullptr, nullptr, nullptr, nullptr);
 }
 
@@ -392,7 +392,10 @@ int  GetThreadId() { return 1; }
 void ChangeThreadPriority(int, int) {}
 void SetDataPath(const char* path) { archive::set_prefix(path); }
 void fn_1e1370(void*) {}
-void Rand_Seed(u32 seed) { srand(seed); }
+// The C library's rand (newlib's, 0x124AF8 / 0x124B10): a 64-bit LCG whose top
+// 31 bits are the answer.  The host's rand is not used: msvcrt's stops at 32767.
+static u64 sRandState = 1;
+void Rand_Seed(u32 seed) { sRandState = seed; }
 // Movie_Play (0x1613D0) is in native/movie.cpp.
 
 // (The start-up notice screen — the publisher's logo — is engine/notice.cpp.)
@@ -1607,7 +1610,10 @@ int  Stream_GetStatus(void*, int voice) { return hal::spu2::stream_active(voice)
 void* fn_1d6db0() { return nullptr; }
 void  fn_1d6a80(void*, int) {}
 void  fn_1d6d80() {}
-int   Rand_Next() { return rand(); }
+int   Rand_Next() {
+    sRandState = sRandState * 6364136223846793005ull + 1;
+    return (int)((sRandState >> 32) & 0x7FFFFFFF);
+}
 void  fn_1656f0() {}
 void  fn_21d8f0(void* hud) { if (hud != nullptr && guest::addr(hud) != 0) Hud_Reset(hud); }   // 0x21D8F0, from the scene base's destructor
 

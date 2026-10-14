@@ -299,8 +299,8 @@ GUEST_BIND(0x157DE0, EaseFollow_Reset);
 static const struct EaseBinds {
     EaseBinds() {
         for (u32 address : {0x157CB0u, 0x157D10u, 0x157D70u, 0x157B20u})
-            guest::bind(address, reinterpret_cast<void*>(Ease_Dtor), "Ease_Dtor");
-        guest::bind(0x157DD0u, reinterpret_cast<void*>(Ease_ResetNone), "Ease_ResetNone");
+            guest::bind(address, Ease_Dtor, "Ease_Dtor");
+        guest::bind(0x157DD0u, Ease_ResetNone, "Ease_ResetNone");
     }
 } sEaseBinds;
 
@@ -1128,13 +1128,13 @@ static void DeathCam_Step(DeathCam* self, CamList* list) {              // 0x244
     }
     CamList_Push(list, Cam_Duelling(who) ? DuelCam_New(who) : FollowCam_NewFor(who));
 }
-static const guest::Binder guest_bind_DeathCam_Dtor{0x244280, reinterpret_cast<void*>(SpecialCam_Dtor), "DeathCam_Dtor"};
+static const guest::Binder guest_bind_DeathCam_Dtor{0x244280, SpecialCam_Dtor, "DeathCam_Dtor"};
 GUEST_BIND(0x244650, DeathCam_Compute);
 GUEST_BIND(0x244410, DeathCam_Attach);
 GUEST_BIND(0x244400, DeathCam_Distance);
 GUEST_BIND(0x244360, DeathCam_Detach);
 GUEST_BIND(0x2447D0, DeathCam_Step);
-static const guest::Binder guest_bind_DeathCam_Flags{0x2442E0, reinterpret_cast<void*>(Cam_Flags2), "DeathCam_Flags"};
+static const guest::Binder guest_bind_DeathCam_Flags{0x2442E0, Cam_Flags2, "DeathCam_Flags"};
 
 // ── The spot camera (0x279FC0–0x27A520, vtable 0x2ECE40, 0xF0 bytes): in
 // cells marked 0x40 the camera stops following.  It was made to cut to
@@ -1468,9 +1468,9 @@ GUEST_BIND(0x18BC00, TalkCam_Distance);
 static const struct CamBinds {
     CamBinds() {
         for (u32 address : {0x151430u, 0x151E60u, 0x18BB50u})
-            guest::bind(address, reinterpret_cast<void*>(Cam_Dtor), "Cam_Dtor");
+            guest::bind(address, Cam_Dtor, "Cam_Dtor");
         for (u32 address : {0x1506A0u, 0x1507A0u, 0x150E50u})
-            guest::bind(address, reinterpret_cast<void*>(Cam_Nothing), "Cam_Nothing");
+            guest::bind(address, Cam_Nothing, "Cam_Nothing");
     }
 } sCamBinds;
 

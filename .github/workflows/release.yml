@@ -41,9 +41,48 @@ jobs:
           name: wots2-linux-x86_64
           path: wots2-linux-x86_64.tar.gz
 
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2 mingw-w64-x86_64-libarchive zip
+      - name: Build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          ninja -C build
+      - name: Package
+        run: |
+          d=wots2-windows-x86_64
+          mkdir -p $d/mods
+          cp build/wots2.exe $d/
+          strip $d/wots2.exe
+          for m in widescreen resolution fps_unlock; do
+            mkdir $d/mods/$m
+            cp mods/$m/mod.ini mods/$m/$m.dll $d/mods/$m/
+            strip $d/mods/$m/$m.dll
+          done
+          # The MinGW libraries the program and the mods use (SDL2, libarchive and its own).
+          ldd $d/wots2.exe $d/mods/*/*.dll | awk '$3 ~ /^\/mingw64\// {print $3}' | sort -u | xargs -r cp -t $d/
+          cp mods/README.md $d/mods/
+          cp packaging/README-windows.txt $d/README.txt
+          zip -r $d.zip $d
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wots2-windows-x86_64
+          path: wots2-windows-x86_64.zip
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux]
+    needs: [linux, windows]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4

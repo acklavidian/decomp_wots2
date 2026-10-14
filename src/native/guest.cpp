@@ -18,7 +18,7 @@ constexpr u32 kRamEnd   = 0x02000000;
 constexpr u32 kHeapBase = 0x00400000;
 constexpr u32 kHeapEnd  = 0x01F00000;
 
-struct Bound { void* fn; const char* name; };
+struct Bound { void* fn; guest::Invoker invoke; const char* name; };
 // Function-local so that GUEST_BIND registrations, which run during static
 // initialisation in other files, always find it constructed.
 std::unordered_map<u32, Bound>& registry() {
@@ -153,8 +153,17 @@ void free(void* p) {
     b->used = 0;
 }
 
-void bind(u32 address, void* fn, const char* name) {
-    registry()[address] = {fn, name};
+void bind(u32 address, const Fn& fn, const char* name) {
+    registry()[address] = {fn.fn, fn.invoke, name};
+}
+
+bool find(u32 address, void** fn, Invoker* invoke) {
+    auto it = registry().find(address);
+    if (it == registry().end())
+        return false;
+    *fn = it->second.fn;
+    *invoke = it->second.invoke;
+    return true;
 }
 
 void* lookup(u32 address) {

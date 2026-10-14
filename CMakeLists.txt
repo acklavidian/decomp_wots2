@@ -164,8 +164,10 @@ add_executable(wots2 src/main.cpp)
 if(WIN32)
     # Everything but SDL2 (and libarchive's own libraries) linked in; the
     # program has a plain main, so SDL's WinMain shim is not wanted.
+    # -mwindows: a windowed program (no console window of its own; the
+    # launcher sends what it prints to a console or to wots2.log).
     target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal
-        opengl32 comdlg32 -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+        opengl32 comdlg32 -mwindows -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
 elseif(APPLE)
     # The game's memory sits at its PS2 addresses, from 1 MB up: the zero page
     # must end below that (by default it covers the first 4 GB).

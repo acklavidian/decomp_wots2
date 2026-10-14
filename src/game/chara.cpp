@@ -1221,26 +1221,26 @@ static int  Chara_Zero(Chara*) { return 0; }
 
 void Chara_BindMethods() {
     using guest::bind;
-    struct Method { u32 address; void* fn; const char* name; };
+    struct Method { u32 address; guest::Fn fn; const char* name; };
     const Method methods[] = {
         // the player's class                                    everyone else's
-        {0x269BA0, (void*)CharaPlayer_Dtor, "CharaPlayer_Dtor"}, {0x2692D0, (void*)CharaOther_Dtor, "CharaOther_Dtor"},
-        {0x269B90, (void*)Chara_BeginFrame, "Chara_BeginFrame"}, {0x2692C0, (void*)Chara_BeginFrame, "Chara_BeginFrame"},
-        {0x269B80, (void*)Chara_Update, "Chara_Update"},         {0x2692B0, (void*)Chara_Update, "Chara_Update"},
-        {0x269B70, (void*)Chara_StepMap, "Chara_StepMap"},       {0x2692A0, (void*)Chara_StepMap, "Chara_StepMap"},
-        {0x269B30, (void*)CharaPlayer_Draw, "CharaPlayer_Draw"}, {0x269290, (void*)Chara_Draw, "Chara_Draw"},
-        {0x269920, (void*)CharaPlayer_Cull, "CharaPlayer_Cull"}, {0x269240, (void*)CharaOther_Cull, "CharaOther_Cull"},
-        {0x2698F0, (void*)Chara_Nop, "Chara_Nop"},               {0x2691B0, (void*)Chara_Nop, "Chara_Nop"},
-        {0x269910, (void*)Chara_Zero, "Chara_Zero"},
-        {0x269900, (void*)Chara_Nop, "Chara_Nop"},
-        {0x2698B0, (void*)CharaPlayer_StepFlags, "CharaPlayer_StepFlags"}, {0x2691A0, (void*)Chara_StepFlags, "Chara_StepFlags"},
-        {0x269460, (void*)Chara_UnloadSword, "Chara_UnloadSword"}, {0x269030, (void*)Chara_UnloadSword, "Chara_UnloadSword"},
-        {0x269870, (void*)CharaPlayer_OnDamage, "CharaPlayer_OnDamage"}, {0x2690F0, (void*)CharaOther_OnDamage, "CharaOther_OnDamage"},
-        {0x269830, (void*)CharaPlayer_OnGuard, "CharaPlayer_OnGuard"}, {0x2690E0, (void*)Chara_OnGuard, "Chara_OnGuard"},
-        {0x2695E0, (void*)CharaPlayer_OnHit, "CharaPlayer_OnHit"},   {0x2690C0, (void*)Chara_OnHit, "Chara_OnHit"},
-        {0x269580, (void*)CharaPlayer_TryParry, "CharaPlayer_TryParry"}, {0x2690A0, (void*)Chara_TryParry, "Chara_TryParry"},
-        {0x269370, (void*)CharaPlayer_ArmAttack, "CharaPlayer_ArmAttack"}, {0x1CD970, (void*)Chara_ArmAttack, "Chara_ArmAttack"},
-        {0x2694C0, (void*)CharaPlayer_WearSword, "CharaPlayer_WearSword"}, {0x269080, (void*)Chara_WearSword, "Chara_WearSword"},
+        {0x269BA0, CharaPlayer_Dtor, "CharaPlayer_Dtor"}, {0x2692D0, CharaOther_Dtor, "CharaOther_Dtor"},
+        {0x269B90, Chara_BeginFrame, "Chara_BeginFrame"}, {0x2692C0, Chara_BeginFrame, "Chara_BeginFrame"},
+        {0x269B80, Chara_Update, "Chara_Update"},         {0x2692B0, Chara_Update, "Chara_Update"},
+        {0x269B70, Chara_StepMap, "Chara_StepMap"},       {0x2692A0, Chara_StepMap, "Chara_StepMap"},
+        {0x269B30, CharaPlayer_Draw, "CharaPlayer_Draw"}, {0x269290, Chara_Draw, "Chara_Draw"},
+        {0x269920, CharaPlayer_Cull, "CharaPlayer_Cull"}, {0x269240, CharaOther_Cull, "CharaOther_Cull"},
+        {0x2698F0, Chara_Nop, "Chara_Nop"},               {0x2691B0, Chara_Nop, "Chara_Nop"},
+        {0x269910, Chara_Zero, "Chara_Zero"},
+        {0x269900, Chara_Nop, "Chara_Nop"},
+        {0x2698B0, CharaPlayer_StepFlags, "CharaPlayer_StepFlags"}, {0x2691A0, Chara_StepFlags, "Chara_StepFlags"},
+        {0x269460, Chara_UnloadSword, "Chara_UnloadSword"}, {0x269030, Chara_UnloadSword, "Chara_UnloadSword"},
+        {0x269870, CharaPlayer_OnDamage, "CharaPlayer_OnDamage"}, {0x2690F0, CharaOther_OnDamage, "CharaOther_OnDamage"},
+        {0x269830, CharaPlayer_OnGuard, "CharaPlayer_OnGuard"}, {0x2690E0, Chara_OnGuard, "Chara_OnGuard"},
+        {0x2695E0, CharaPlayer_OnHit, "CharaPlayer_OnHit"},   {0x2690C0, Chara_OnHit, "Chara_OnHit"},
+        {0x269580, CharaPlayer_TryParry, "CharaPlayer_TryParry"}, {0x2690A0, Chara_TryParry, "Chara_TryParry"},
+        {0x269370, CharaPlayer_ArmAttack, "CharaPlayer_ArmAttack"}, {0x1CD970, Chara_ArmAttack, "Chara_ArmAttack"},
+        {0x2694C0, CharaPlayer_WearSword, "CharaPlayer_WearSword"}, {0x269080, Chara_WearSword, "Chara_WearSword"},
     };
     for (const Method& m : methods)
         bind(m.address, m.fn, m.name);

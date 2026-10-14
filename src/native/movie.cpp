@@ -27,7 +27,13 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 extern char** environ;
 
@@ -61,8 +67,13 @@ bool Wanted(const std::string& file) {
     for (char** e = environ; *e; e++) {
         if (strncmp(*e, "WOTS2_", 6) != 0)
             continue;
-        if (strncmp(*e, "WOTS2_VOLUME=", 13) == 0 || strncmp(*e, "WOTS2_SAVE=", 11) == 0 ||
-            strncmp(*e, "WOTS2_NEW_GAME=", 15) == 0)
+        // Settings a player may use: they do not make a run scripted.
+        static const char* const kPlayer[] = {"WOTS2_VOLUME=", "WOTS2_SAVE=", "WOTS2_NEW_GAME=", "WOTS2_DATA=",
+                                              "WOTS2_CARD=", "WOTS2_MODS=", "WOTS2_MOD_", "WOTS2_VIDEO="};
+        bool player = false;
+        for (const char* p : kPlayer)
+            player = player || strncmp(*e, p, strlen(p)) == 0;
+        if (player)
             continue;
         return false;
     }
@@ -159,6 +170,56 @@ bool ReadFrame(FILE* pipe, std::vector<u8>& frame, const char** why) {
     return true;
 }
 
+#ifdef _WIN32
+// The decoder without a console window (_popen would open one for cmd.exe in
+// a windowed program).  Windows looks for ffmpeg.exe beside the program
+// first, then along the PATH.
+HANDLE sDecoder = nullptr;
+
+FILE* OpenDecoder(const char* command) {
+    SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+    HANDLE rd = nullptr, wr = nullptr;
+    if (!CreatePipe(&rd, &wr, &sa, 1 << 20))
+        return nullptr;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    HANDLE nul = CreateFileA("NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                             OPEN_EXISTING, 0, nullptr);
+    STARTUPINFOA si{};
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nul;
+    si.hStdOutput = wr;
+    si.hStdError = nul;
+    PROCESS_INFORMATION pi{};
+    std::string line = command;
+    const BOOL ok = CreateProcessA(nullptr, line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
+                                   nullptr, &si, &pi);
+    CloseHandle(wr);
+    if (nul != INVALID_HANDLE_VALUE)
+        CloseHandle(nul);
+    if (!ok) {
+        CloseHandle(rd);
+        return nullptr;
+    }
+    CloseHandle(pi.hThread);
+    sDecoder = pi.hProcess;
+    return _fdopen(_open_osfhandle((intptr_t)rd, _O_RDONLY | _O_BINARY), "rb");
+}
+
+void CloseDecoder(FILE* f) {
+    fclose(f);
+    if (sDecoder != nullptr) {
+        if (WaitForSingleObject(sDecoder, 2000) == WAIT_TIMEOUT)
+            TerminateProcess(sDecoder, 0);
+        CloseHandle(sDecoder);
+        sDecoder = nullptr;
+    }
+}
+#else
+FILE* OpenDecoder(const char* command) { return popen(command, "r"); }
+void CloseDecoder(FILE* f) { pclose(f); }
+#endif
+
 }  // namespace
 
 // Is this (a movie, or the logo screen) shown in this run?
@@ -174,9 +235,9 @@ extern "C" int Movie_Play(const char* path) {
     char command[1024];
 #ifdef _WIN32
     snprintf(command, sizeof command,
-             "ffmpeg -v quiet -nostdin -i \"%s\" -an -vf scale=%d:%d -r 30 -pix_fmt rgba -f rawvideo - 2>NUL",
+             "ffmpeg -v quiet -nostdin -i \"%s\" -an -vf scale=%d:%d -r 30 -pix_fmt rgba -f rawvideo -",
              file.c_str(), w, h);
-    FILE* video = _popen(command, "rb");
+    FILE* video = OpenDecoder(command);
 #else
     std::string quoted;
     for (char c : file)
@@ -184,13 +245,13 @@ extern "C" int Movie_Play(const char* path) {
     snprintf(command, sizeof command,
              "ffmpeg -v quiet -nostdin -i '%s' -an -vf scale=%d:%d -r 30 -pix_fmt rgba -f rawvideo - 2>/dev/null",
              quoted.c_str(), w, h);
-    FILE* video = popen(command, "r");
+    FILE* video = OpenDecoder(command);
 #endif
     std::vector<u8> frame((size_t)w * h * 4);
     const char* why = "";
     if (!video || !ReadFrame(video, frame, &why)) {
         if (video)
-            pclose(video);
+            CloseDecoder(video);
         printf("[movie] cannot be shown (is ffmpeg installed?): %s\n", file.c_str());
         return 0;
     }
@@ -228,7 +289,7 @@ extern "C" int Movie_Play(const char* path) {
         if (!ReadFrame(video, frame, &why))
             break;
     }
-    pclose(video);
+    CloseDecoder(video);
     printf("[movie] %d frames shown (%s)\n", shown, *why ? why : "stopped by the pad");
     hal::spu2::sample_stop(sSound.left.data());
     hal::spu2::sample_stop(sSound.right.data());

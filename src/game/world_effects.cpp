@@ -619,9 +619,9 @@ Particle* Particle_Ctor(Particle* self, u32 vtable) {
     return self;
 }
 GUEST_BIND(0x171EF0, Particle_Dtor);
-static const guest::Binder guest_bind_Particle_Dtor_1{0x171650, reinterpret_cast<void*>(Particle_Dtor), "Particle_Dtor"};
-static const guest::Binder guest_bind_Particle_Dtor_2{0x171410, reinterpret_cast<void*>(Particle_Dtor), "Particle_Dtor"};
-static const guest::Binder guest_bind_Particle_Dtor_3{0x171030, reinterpret_cast<void*>(Particle_Dtor), "Particle_Dtor"};
+static const guest::Binder guest_bind_Particle_Dtor_1{0x171650, Particle_Dtor, "Particle_Dtor"};
+static const guest::Binder guest_bind_Particle_Dtor_2{0x171410, Particle_Dtor, "Particle_Dtor"};
+static const guest::Binder guest_bind_Particle_Dtor_3{0x171030, Particle_Dtor, "Particle_Dtor"};
 GUEST_BIND(0x171AC0, Particle_Start);
 GUEST_BIND(0x1719F0, Particle_Update);
 GUEST_BIND(0x171710, Particle_DrawSquare);
@@ -863,7 +863,7 @@ int Drop_Draw(Mote* self) {                                                 // 0
                            SpriteSet_FindByName(*gEffectSprites, P<const char>(*P<u32>(0x2EE1E4u))), &quad);   // "blood"
     return 1;
 }
-static const guest::Binder guest_bind_Mote_Dtor_1{0x22F290, reinterpret_cast<void*>(Mote_Dtor), "Mote_Dtor"};
+static const guest::Binder guest_bind_Mote_Dtor_1{0x22F290, Mote_Dtor, "Mote_Dtor"};
 GUEST_BIND(0x22F190, Drop_Start);
 GUEST_BIND(0x22EFD0, Drop_Update);
 GUEST_BIND(0x22EDA0, Drop_Draw);
@@ -931,7 +931,7 @@ int Pool_Draw(Mote* self) {                                                 // 0
     DrawProjected(tex0, 0x15C, sprite, at, kQuadCorners, 4, alpha << 24 | 0x808080);
     return 1;
 }
-static const guest::Binder guest_bind_Mote_Dtor_2{0x1879A0, reinterpret_cast<void*>(Mote_Dtor), "Mote_Dtor"};
+static const guest::Binder guest_bind_Mote_Dtor_2{0x1879A0, Mote_Dtor, "Mote_Dtor"};
 GUEST_BIND(0x187920, Pool_Start);
 GUEST_BIND(0x1878A0, Pool_Update);
 GUEST_BIND(0x187590, Pool_Draw);
@@ -1035,7 +1035,7 @@ int Spray_Start(Spray* self, const SprayParams* from, u32 shake) {          // 0
     return 1;
 }
 int Spray_Draw(Spray*) { return 1; }                                        // 0x221DE0
-static const guest::Binder guest_bind_Mote_Dtor_3{0x222550, reinterpret_cast<void*>(Mote_Dtor), "Mote_Dtor"};
+static const guest::Binder guest_bind_Mote_Dtor_3{0x222550, Mote_Dtor, "Mote_Dtor"};
 GUEST_BIND(0x222260, Spray_Start);
 GUEST_BIND(0x221DF0, Spray_Update);
 GUEST_BIND(0x221DE0, Spray_Draw);
@@ -1090,7 +1090,7 @@ int Spark_Draw(Mote* self) {                                                // 0
                      &draw);       // "dot"
     return 1;
 }
-static const guest::Binder guest_bind_Mote_Dtor_4{0x239CF0, reinterpret_cast<void*>(Mote_Dtor), "Mote_Dtor"};
+static const guest::Binder guest_bind_Mote_Dtor_4{0x239CF0, Mote_Dtor, "Mote_Dtor"};
 GUEST_BIND(0x239C10, Spark_Start);
 GUEST_BIND(0x239B20, Spark_Update);
 GUEST_BIND(0x239A40, Spark_Draw);
@@ -1144,7 +1144,7 @@ int Impact_Start(Impact* self, const SparkSource* from, u32) {              // 0
     return 1;
 }
 int Impact_Draw(Impact*) { return 1; }                                      // 0x239490
-static const guest::Binder guest_bind_Mote_Dtor_5{0x2399A0, reinterpret_cast<void*>(Mote_Dtor), "Mote_Dtor"};
+static const guest::Binder guest_bind_Mote_Dtor_5{0x2399A0, Mote_Dtor, "Mote_Dtor"};
 GUEST_BIND(0x239860, Impact_Start);
 GUEST_BIND(0x2394A0, Impact_Update);
 GUEST_BIND(0x239490, Impact_Draw);
@@ -1275,7 +1275,7 @@ int Streak_Draw(Streak* self) {                                             // 0
 GUEST_BIND(0x268AA0, Streak_Start);
 GUEST_BIND(0x268A50, Streak_Update);
 GUEST_BIND(0x2688F0, Streak_Draw);
-static const guest::Binder guest_bind_Streak_Dtor{0x268B20, reinterpret_cast<void*>(Mote_Dtor), "Streak_Dtor"};
+static const guest::Binder guest_bind_Streak_Dtor{0x268B20, Mote_Dtor, "Streak_Dtor"};
 
 int Flash_Start(Flash* self, const float* pos, u32 rgb) {                   // 0x268DB0
     Copy4(self->pos, pos);
@@ -1334,7 +1334,7 @@ int Flash_Draw(Flash* self) {                                               // 0
 GUEST_BIND(0x268DB0, Flash_Start);
 GUEST_BIND(0x268D50, Flash_Update);
 GUEST_BIND(0x268BC0, Flash_Draw);
-static const guest::Binder guest_bind_Flash_Dtor{0x268F90, reinterpret_cast<void*>(Mote_Dtor), "Flash_Dtor"};
+static const guest::Binder guest_bind_Flash_Dtor{0x268F90, Mote_Dtor, "Flash_Dtor"};
 
 // ── 0x243460: blood from a character ──────────────────────────────────────
 void Chara_Bleed(Chara* chara, const float* at, int level) {
@@ -1430,7 +1430,7 @@ int Glare_Draw(Glare* self) {                                               // 0
     GsDevice_DrawTexturedPrim(*gGsDevice, &packet, 8);
     return 1;
 }
-static const guest::Binder guest_bind_Glare_Dtor{0x22F880, reinterpret_cast<void*>(Mote_Dtor), "Glare_Dtor"};
+static const guest::Binder guest_bind_Glare_Dtor{0x22F880, Mote_Dtor, "Glare_Dtor"};
 GUEST_BIND(0x22F850, Glare_Start);
 GUEST_BIND(0x22F820, Glare_Update);
 GUEST_BIND(0x22F330, Glare_Draw);
@@ -1480,7 +1480,7 @@ int Dust_Draw(Mote* self) {                                                 // 0
         SpriteSet_DrawQuad(*gEffectSprites, SpriteSet_FindByName(*gEffectSprites, P<const char>(0x2E8540u)), &quad);  // "hokori"
     return 1;
 }
-static const guest::Binder guest_bind_Dust_Dtor{0x29AD60, reinterpret_cast<void*>(Mote_Dtor), "Dust_Dtor"};
+static const guest::Binder guest_bind_Dust_Dtor{0x29AD60, Mote_Dtor, "Dust_Dtor"};
 GUEST_BIND(0x29ACC0, Dust_Start);
 GUEST_BIND(0x29AC10, Dust_Update);
 GUEST_BIND(0x29AAA0, Dust_Draw);
@@ -2075,7 +2075,7 @@ int Glint_Draw(Glint* self) {                                   // 0x186FE0
 GUEST_BIND(0x187450, Glint_Start);
 GUEST_BIND(0x187380, Glint_Update);
 GUEST_BIND(0x186FE0, Glint_Draw);
-static const guest::Binder guest_bind_Glint_Dtor{0x1874D0, reinterpret_cast<void*>(Mote_Dtor), "Glint_Dtor"};
+static const guest::Binder guest_bind_Glint_Dtor{0x1874D0, Mote_Dtor, "Glint_Dtor"};
 // What the sword holder does when a technique is learnt (0x244F90, 0x245030).
 void Fx_TechniqueGlint(CharaParams* owner) {
     if (owner == nullptr)
@@ -2159,7 +2159,7 @@ int Shard_Draw(Shard* self) {                                   // 0x24C380
 GUEST_BIND(0x24C580, Shard_Start);
 GUEST_BIND(0x24C4E0, Shard_Update);
 GUEST_BIND(0x24C380, Shard_Draw);
-static const guest::Binder guest_bind_Shard_Dtor{0x24C640, reinterpret_cast<void*>(Mote_Dtor), "Shard_Dtor"};
+static const guest::Binder guest_bind_Shard_Dtor{0x24C640, Mote_Dtor, "Shard_Dtor"};
 int Shards_Start(Shards* self, const float* pos, u32) {         // 0x24C1F0
     self->base.life = 0;
     Copy4(self->pos, pos);
@@ -2183,7 +2183,7 @@ int Shards_Draw(Shards*) { return 1; }                          // 0x24C1B0
 GUEST_BIND(0x24C1F0, Shards_Start);
 GUEST_BIND(0x24C1C0, Shards_Update);
 GUEST_BIND(0x24C1B0, Shards_Draw);
-static const guest::Binder guest_bind_Shards_Dtor{0x24C2E0, reinterpret_cast<void*>(Mote_Dtor), "Shards_Dtor"};
+static const guest::Binder guest_bind_Shards_Dtor{0x24C2E0, Mote_Dtor, "Shards_Dtor"};
 // What the sword holder does when the sword in hand loses a point (0x2452F0).
 void Fx_SwordShards(const float* pos) {
     alignas(16) float at[4];
@@ -2397,12 +2397,12 @@ int SmokeSpark_Draw(SmokeSpark* self) {                         // 0x23F6A0
     return 1;
 }
 GUEST_BIND(0x241CA0, Smoke_Dtor);
-static const guest::Binder guest_bind_Smoke_Dtor_1{0x241FE0, reinterpret_cast<void*>(Smoke_Dtor), "Smoke_Dtor"};
-static const guest::Binder guest_bind_Smoke_Dtor_2{0x241F70, reinterpret_cast<void*>(Smoke_Dtor), "Smoke_Dtor"};
-static const guest::Binder guest_bind_Smoke_Dtor_3{0x240EE0, reinterpret_cast<void*>(Smoke_Dtor), "Smoke_Dtor"};
-static const guest::Binder guest_bind_Smoke_Dtor_4{0x241D00, reinterpret_cast<void*>(Smoke_Dtor), "Smoke_Dtor"};
-static const guest::Binder guest_bind_Smoke_Dtor_5{0x23FA50, reinterpret_cast<void*>(Smoke_Dtor), "Smoke_Dtor"};
-static const guest::Binder guest_bind_Smoke_Dtor_6{0x241010, reinterpret_cast<void*>(Smoke_Dtor), "Smoke_Dtor"};
+static const guest::Binder guest_bind_Smoke_Dtor_1{0x241FE0, Smoke_Dtor, "Smoke_Dtor"};
+static const guest::Binder guest_bind_Smoke_Dtor_2{0x241F70, Smoke_Dtor, "Smoke_Dtor"};
+static const guest::Binder guest_bind_Smoke_Dtor_3{0x240EE0, Smoke_Dtor, "Smoke_Dtor"};
+static const guest::Binder guest_bind_Smoke_Dtor_4{0x241D00, Smoke_Dtor, "Smoke_Dtor"};
+static const guest::Binder guest_bind_Smoke_Dtor_5{0x23FA50, Smoke_Dtor, "Smoke_Dtor"};
+static const guest::Binder guest_bind_Smoke_Dtor_6{0x241010, Smoke_Dtor, "Smoke_Dtor"};
 GUEST_BIND(0x241A90, Smoke_Update);
 GUEST_BIND(0x241670, Steam_Update);
 GUEST_BIND(0x2414A0, HeavySmoke_Update);
@@ -2632,7 +2632,7 @@ int Firefly_Draw(Firefly* self) {                               // 0x2BAAA0
 GUEST_BIND(0x2BAE50, Firefly_Start);
 GUEST_BIND(0x2BAC90, Firefly_Update);
 GUEST_BIND(0x2BAAA0, Firefly_Draw);
-static const guest::Binder guest_bind_Smoke_Dtor_7{0x2BAEB0, reinterpret_cast<void*>(Smoke_Dtor), "Smoke_Dtor"};
+static const guest::Binder guest_bind_Smoke_Dtor_7{0x2BAEB0, Smoke_Dtor, "Smoke_Dtor"};
 void Fx_PlaceFirefly(const float* pos) {
     if (Firefly* e = static_cast<Firefly*>(Smoke_New(0x150, 0x2ED8C0u))) {
         Firefly_Start(e, pos, 0);

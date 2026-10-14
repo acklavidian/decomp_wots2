@@ -969,7 +969,7 @@ SceneryObject* Scenery_Ctor(void* mem) {                        // 0x21ABA0
 const struct ObjectBinder {
     ObjectBinder() {
         const auto bind = [](u32 address, auto fn, const char* name) {
-            guest::bind(address, reinterpret_cast<void*>(fn), name);
+            guest::bind(address, fn, name);
         };
         bind(0x1533E0, Object_Dtor, "Object_Dtor");
         bind(0x1532D0, Object_Update, "Object_Update");

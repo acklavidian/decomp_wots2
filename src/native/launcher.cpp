@@ -28,6 +28,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>
+#include <io.h>
 #include <process.h>
 #else
 #include <unistd.h>
@@ -454,9 +455,9 @@ std::string ask_and_extract(const std::string& dest) {
     const SDL_MessageBoxData box = {
         SDL_MESSAGEBOX_INFORMATION, nullptr, "Way of the Samurai 2",
         "The game's files have not been set up yet.\n\n"
-        "Choose your copy of the disc (SLUS-208.93): an .iso image, or a\n"
-        ".zip / .7z / .rar archive that holds it. Its files are unpacked once,\n"
-        "into the folder \"extracted\" (about 1.5 GB).",
+        "Choose your copy of the disc (SLUS-208.93): an .iso image, or a "
+        ".zip / .7z / .rar archive that holds it.\n\n"
+        "Its files are unpacked once, into the folder \"extracted\" (about 1.5 GB).",
         2, buttons, nullptr};
     for (;;) {
         int pressed = 0;
@@ -538,8 +539,41 @@ bool extract(const std::string& source, const std::string& dest, const Progress&
 #endif
 }
 
+#ifdef _WIN32
+// Started from Explorer (a double click, or a file dropped on the program) the
+// working directory can be anywhere: the game's files, its mods and its saves
+// are looked for beside the program.  And a windowed program has no console:
+// what it prints goes to the console it was started from, if any, else to
+// wots2.log.
+static void windows_start(int argc, char* argv[]) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    for (int i = 1; i < argc; i++)
+        if (argv[i][0] != '-' && fs::exists(argv[i], ec))
+            argv[i] = strdup(fs::absolute(argv[i], ec).string().c_str());
+    char self[MAX_PATH * 4];
+    if (GetModuleFileNameA(nullptr, self, sizeof self) != 0)
+        fs::current_path(fs::path(self).parent_path(), ec);
+
+    const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+    if (err != nullptr && err != INVALID_HANDLE_VALUE && GetFileType(err) != FILE_TYPE_UNKNOWN)
+        return;                                 // already somewhere (redirected)
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
+    } else if (freopen("wots2.log", "w", stdout) != nullptr) {
+        _dup2(_fileno(stdout), _fileno(stderr));
+    }
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+}
+#endif
+
 std::string locate(int argc, char* argv[]) {
     SDL_SetMainReady();
+#ifdef _WIN32
+    windows_start(argc, argv);
+#endif
     const char* data = getenv("WOTS2_DATA");
     std::string dest = data && *data ? data : "extracted";
 

@@ -680,10 +680,10 @@ ShopMenu* Shop_Ctor(void* mem) {
 
 const struct ShopBinder {
     ShopBinder() {
-        guest::bind(0x22C310, reinterpret_cast<void*>(Shop_Dtor), "Shop_Dtor");
-        guest::bind(0x22C280, reinterpret_cast<void*>(Shop_Show), "Shop_Show");
-        guest::bind(0x22B850, reinterpret_cast<void*>(Shop_Update), "Shop_Update");
-        guest::bind(0x22A2D0, reinterpret_cast<void*>(Shop_Draw), "Shop_Draw");
+        guest::bind(0x22C310, Shop_Dtor, "Shop_Dtor");
+        guest::bind(0x22C280, Shop_Show, "Shop_Show");
+        guest::bind(0x22B850, Shop_Update, "Shop_Update");
+        guest::bind(0x22A2D0, Shop_Draw, "Shop_Draw");
     }
 } sShopBinder;
 

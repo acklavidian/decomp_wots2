@@ -865,19 +865,19 @@ u32 FlagsObj_AddItem(void* flags, u32 matrix, const float* size) {
 // The methods, by the addresses the vtables hold.
 static const struct VolumeBinder {
     VolumeBinder() {
-        const struct { u32 address; void* fn; const char* name; } methods[] = {
-            {0x157400, (void*)Volume_Dtor, "Volume_Dtor"},   {0x156E60, (void*)Volume_Nop, "Volume_Nop"},
-            {0x1552D0, (void*)Volume_ClearFound, "Volume_ClearFound"}, {0x155260, (void*)Volume_Zero, "Volume_Zero"},
-            {0x156E70, (void*)Volume_Zero, "Volume_Zero"},   {0x157240, (void*)Volume_Nop, "Volume_Nop"},
-            {0x15A520, (void*)Body_Dtor, "Body_Dtor"},       {0x15A280, (void*)Body_Refresh, "Body_Refresh"},
-            {0x15A260, (void*)Body_Clear, "Body_Clear"},     {0x159FE0, (void*)Body_Active, "Body_Active"},
-            {0x15A390, (void*)Body_Present, "Body_Present"}, {0x159BA0, (void*)Volume_Nop, "Volume_Nop"},
-            {0x16B620, (void*)SwordVol_Dtor, "SwordVol_Dtor"},     {0x16B3A0, (void*)Sword_Refresh, "Sword_Refresh"},
-            {0x16B600, (void*)Sword_Clear, "Sword_Clear"},   {0x16B320, (void*)Sword_Active, "Sword_Active"},
-            {0x16B410, (void*)Sword_Present, "Sword_Present"}, {0x16B0B0, (void*)Volume_Nop, "Volume_Nop"},
-            {0x2104E0, (void*)Item_Dtor, "Item_Dtor"},       {0x210420, (void*)Item_Refresh, "Item_Refresh"},
-            {0x210410, (void*)Item_Clear, "Item_Clear"},     {0x2105A0, (void*)Item_Active, "Item_Active"},
-            {0x210470, (void*)Item_Present, "Item_Present"}, {0x2103F0, (void*)Volume_Nop, "Volume_Nop"},
+        const struct { u32 address; guest::Fn fn; const char* name; } methods[] = {
+            {0x157400, Volume_Dtor, "Volume_Dtor"},   {0x156E60, Volume_Nop, "Volume_Nop"},
+            {0x1552D0, Volume_ClearFound, "Volume_ClearFound"}, {0x155260, Volume_Zero, "Volume_Zero"},
+            {0x156E70, Volume_Zero, "Volume_Zero"},   {0x157240, Volume_Nop, "Volume_Nop"},
+            {0x15A520, Body_Dtor, "Body_Dtor"},       {0x15A280, Body_Refresh, "Body_Refresh"},
+            {0x15A260, Body_Clear, "Body_Clear"},     {0x159FE0, Body_Active, "Body_Active"},
+            {0x15A390, Body_Present, "Body_Present"}, {0x159BA0, Volume_Nop, "Volume_Nop"},
+            {0x16B620, SwordVol_Dtor, "SwordVol_Dtor"},     {0x16B3A0, Sword_Refresh, "Sword_Refresh"},
+            {0x16B600, Sword_Clear, "Sword_Clear"},   {0x16B320, Sword_Active, "Sword_Active"},
+            {0x16B410, Sword_Present, "Sword_Present"}, {0x16B0B0, Volume_Nop, "Volume_Nop"},
+            {0x2104E0, Item_Dtor, "Item_Dtor"},       {0x210420, Item_Refresh, "Item_Refresh"},
+            {0x210410, Item_Clear, "Item_Clear"},     {0x2105A0, Item_Active, "Item_Active"},
+            {0x210470, Item_Present, "Item_Present"}, {0x2103F0, Volume_Nop, "Volume_Nop"},
         };
         for (const auto& m : methods)
             guest::bind(m.address, m.fn, m.name);

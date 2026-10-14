@@ -145,7 +145,7 @@ void* Layer_Dtor(FaceLayer* l, s16) {                       // 0x26BD40, 0x26B8B
 const struct FaceBinder {
     FaceBinder() {
         const auto bind = [](u32 address, auto fn, const char* name) {
-            guest::bind(address, reinterpret_cast<void*>(fn), name);
+            guest::bind(address, fn, name);
         };
         bind(0x26BA20, Mouth_Tick, "Mouth_Tick");
         bind(0x26BA10, Expr_Tick, "Expr_Tick");

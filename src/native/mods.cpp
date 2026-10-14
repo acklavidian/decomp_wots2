@@ -141,7 +141,7 @@ void* api_guest_ptr(uint32_t address) { return guest::ptr<void>(address); }
 void* api_find(uint32_t address) { return guest::lookup(address); }
 void* api_hook(uint32_t address, void* fn, const char* name) {
     void* was = guest::lookup(address);
-    guest::bind(address, fn, name != nullptr ? name : "mod hook");
+    guest::bind(address, guest::Fn(fn), name != nullptr ? name : "mod hook");
     return was;
 }
 void api_on_frame(void (*fn)(void*), void* user) { sFrameHooks.push_back({fn, user}); }

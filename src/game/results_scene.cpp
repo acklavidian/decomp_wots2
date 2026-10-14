@@ -980,7 +980,7 @@ Scene* ResultsScene_Ctor(void* mem) {                           // 0x2A3460
 // Bound from hle::bind_all (nothing else refers to this file).
 void ResultsScene_Bind() {
     const auto bind = [](u32 address, auto fn, const char* name) {
-        guest::bind(address, reinterpret_cast<void*>(fn), name);
+        guest::bind(address, fn, name);
     };
     bind(0x2A3460, ResultsScene_Ctor, "ResultsScene_Ctor");
     bind(0x2A33B0, ResultsScene_Destroy, "ResultsScene_Destroy");
