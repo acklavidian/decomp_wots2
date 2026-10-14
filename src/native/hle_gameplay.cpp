@@ -364,7 +364,45 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
             const float* wind = guest::ptr<float>(renderMgr + 0x50);
             const u32 playerData = *guest::ptr<u32>(0x2EE688u);
             const bool night = playerData != 0 && *guest::ptr<s8>(playerData + 0x102) != 0;
-            hal::gs::set_ambience(wind, &player->matrix[12], *guest::ptr<s32>(0x2EE518u) == 1, night);
+            const int day = playerData != 0 ? *guest::ptr<s8>(playerData + 0x100) : 0;
+            const int period = playerData != 0 ? *guest::ptr<s8>(playerData + 0x101) : 0;
+            hal::gs::set_ambience(wind, &player->matrix[12], *guest::ptr<s32>(0x2EE518u) == 1, night, day, period);
+            // For the rain: the eaves round the player — a cell with a roof
+            // overhead (byte +0x16 bit 0, as the camera reads it) beside one
+            // without — looked for again every half second or few steps.
+            static std::vector<float> drips;
+            static float lastAt[2] = {1e9f, 1e9f};
+            static int lastFrame = -1000;
+            static u32 lastMap = 0;
+            const float* at = &player->matrix[12];
+            if (m->collision != 0 && (m->collision != lastMap || hal::gs::frame_count() - lastFrame > 15 ||
+                                      fabsf(at[0] - lastAt[0]) + fabsf(at[2] - lastAt[1]) > 2.0f)) {
+                lastMap = m->collision;
+                lastFrame = hal::gs::frame_count();
+                lastAt[0] = at[0];
+                lastAt[1] = at[2];
+                drips.clear();
+                MapCollision* col = guest::ptr<MapCollision>(m->collision);
+                const auto cell = [&](float x, float z) {
+                    const float p[4] = {x, at[1], z, 1.0f};
+                    return Map_CellAt(col, p);
+                };
+                for (float z = at[2] - 10.0f; z <= at[2] + 10.0f && drips.size() < 96 * 4; z += 0.5f)
+                    for (float x = at[0] - 10.0f; x <= at[0] + 10.0f && drips.size() < 96 * 4; x += 0.5f) {
+                        const ColCellType* here = cell(x, z);
+                        if (here == nullptr || (here->_16 & 1) == 0)
+                            continue;
+                        static const float kSide[4][2] = {{0.5f, 0}, {-0.5f, 0}, {0, 0.5f}, {0, -0.5f}};
+                        for (const auto& s : kSide) {
+                            const ColCellType* out = cell(x + s[0], z + s[1]);
+                            if (out == nullptr || (out->_16 & 1) != 0 || (out->flags & 2) != 0)
+                                continue;
+                            drips.insert(drips.end(), {x + s[0] * 0.5f, here->height + 2.6f, z + s[1] * 0.5f, out->height});
+                            break;
+                        }
+                    }
+            }
+            hal::gs::set_drips(drips.data(), (int)(drips.size() / 4));
             static const bool traceWind = getenv("WOTS2_TRACE_WIND") != nullptr;
             if (traceWind)
                 printf("[wind] %.4f %.4f %.4f\n", wind[0], wind[1], wind[2]);

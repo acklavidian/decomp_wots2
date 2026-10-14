@@ -26,6 +26,7 @@ F11 toggles fullscreen.  Saves go in the folder "wots2_card".
 The four mods in "mods" (widescreen, resolution, fps unlock, modern lighting)
 are on; each has a mod.ini you can edit.  In the game: F5 opens a panel to
 adjust the graphics live (and save them), F6 switches the FPS unlock off and
-on, F3 the modern lighting, F7 is photo mode (F12 saves a picture).  See mods/README.md.
+on, F3 the modern lighting, F7 is photo mode (F12 saves a picture), F8 the
+weather.  See mods/README.md.
 
 Source and issues: https://github.com/acklavidian/decomp_wots2

@@ -170,6 +170,11 @@ void api_set_lighting(const Wots2Lighting* in) {
     l.unbake = hal::gs::lighting().unbake;
     l.modelShadow = hal::gs::lighting().modelShadow;
     l.lanternShadows = hal::gs::lighting().lanternShadows;
+    l.weather = hal::gs::lighting().weather;
+    l.rainChance = hal::gs::lighting().rainChance;
+    l.rainAmount = hal::gs::lighting().rainAmount;
+    l.characterBump = hal::gs::lighting().characterBump;
+    l.godRays = hal::gs::lighting().godRays;
     l.unbakeExposure = hal::gs::lighting().unbakeExposure;
     hal::gs::set_lighting(l);
 }
@@ -177,6 +182,23 @@ void api_set_bump(float strength, float depth) {
     hal::gs::Lighting l = hal::gs::lighting();
     l.bump = strength > 0.0f ? strength : 0.0f;
     l.bumpDepth = depth > 0.0f ? depth : 4.0f;
+    hal::gs::set_lighting(l);
+}
+void api_set_character_bump(float share) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.characterBump = share < 0.0f ? 0.0f : share > 1.0f ? 1.0f : share;
+    hal::gs::set_lighting(l);
+}
+void api_set_god_rays(float strength) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.godRays = strength < 0.0f ? 0.0f : strength > 2.0f ? 2.0f : strength;
+    hal::gs::set_lighting(l);
+}
+void api_set_weather(int mode, float chance, float amount) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.weather = mode < 0 || mode > 2 ? 0 : mode;
+    l.rainChance = chance < 0.0f ? 0.0f : chance > 1.0f ? 1.0f : chance;
+    l.rainAmount = amount < 0.0f ? 0.0f : amount > 2.0f ? 2.0f : amount;
     hal::gs::set_lighting(l);
 }
 void api_set_lantern_shadows(int on) {
@@ -244,7 +266,8 @@ void load_mod(const std::string& root, const std::string& id) {
     mod->api = {WOTS2_MOD_API_VERSION, mod->dir.c_str(), api_log, api_setting, api_get_video, api_set_video,
                 api_guest_ptr, api_hook, api_find, api_on_frame, api_pad_buttons, api_get_lighting, api_set_lighting,
                 api_set_map_shadows, api_set_bump, api_set_dust, api_set_unbake, api_set_model_shadow,
-                api_set_lantern_shadows};
+                api_set_lantern_shadows, api_set_weather,
+                api_set_character_bump, api_set_god_rays};
 
     int parts = 0;
     if (is_dir(dir + "/files")) {

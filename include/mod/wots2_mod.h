@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define WOTS2_MOD_API_VERSION 6      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust; 4: set_unbake; 5: set_model_shadow; 6: set_lantern_shadows */
+#define WOTS2_MOD_API_VERSION 8      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust; 4: set_unbake; 5: set_model_shadow; 6: set_lantern_shadows; 7: set_weather; 8: set_character_bump, set_god_rays */
 
 /* What of the picture a mod may change (see include/hal/gs.h, Video). */
 typedef struct Wots2Video {
@@ -115,6 +115,13 @@ struct Wots2Api {
     /* Version 6: the lanterns nearest the player cast the characters' shadows
      * on the ground and light the characters too. */
     void (*set_lantern_shadows)(int on);
+    /* Version 7: weather.  mode 0 by itself (each period rolls `chance` for
+     * rain), 1 always clear, 2 always rain; amount how hard it rains. */
+    void (*set_weather)(int mode, float chance, float amount);
+    /* Version 8: bump mapping on characters too (its share of the map's, 0 … 1);
+     * shafts of light from the sun (0 = off). */
+    void (*set_character_bump)(float share);
+    void (*set_god_rays)(float strength);
 };
 
 /* Exported by the mod.  0 = loaded; anything else: the mod is left out. */

@@ -97,7 +97,9 @@ uniform sampler2D uTex;
 uniform float uAlphaRef;
 uniform vec4 uFog;          // A, B, far distance, on
 uniform vec3 uFogColor;
-// Modern lighting (hal::gs::Lighting): 0 none, 2 the map, 3 a model.
+// Modern lighting (hal::gs::Lighting): 0 none, 2 the map, 3 a model, 4 the
+// wind's dust (its colour is the light: shadowed by the sun's shadows, lit by
+// lanterns).
 uniform int uKind;
 // A cut-out texture in the pass that writes depth: 1 = the filtered alpha
 // only says where it is cut, and what is left is drawn opaque; 2 = then only
@@ -124,6 +126,12 @@ uniform vec3 uLightCol[16];
 // Lantern shadows: the first uLShadowN of the lights have a shadow map each
 // (layers of uLShadow), seen from the lantern through uLShadowMat[i].
 uniform sampler2DArrayShadow uLShadow;
+// Rain: x how hard it rains, y how wet things are, z seconds (for ripples).
+// uRainMask is the map seen from straight above (through uRainMat): what is
+// under something stays dry.
+uniform vec4 uRain;
+uniform mat4 uRainMat;
+uniform sampler2DShadow uRainMask;
 uniform mat4 uLShadowMat[4];
 uniform int uLShadowN;
 layout(location = 0) out vec4 oColor;
@@ -187,6 +195,52 @@ float lantern_lit(int i, vec3 p, vec3 n) {
     }
     return lit / 16.0;
 }
+// 1 where nothing is overhead (the rain reaches it), 0 under a roof.  A
+// point is looked up a little out from its face, so walls count as open.
+float rain_open(vec3 p, vec3 n) {
+    vec3 q = (uRainMat * vec4(p + n * 0.35 + vec3(0.0, 0.05, 0.0), 1.0)).xyz * 0.5 + 0.5;
+    if (q.x <= 0.0 || q.x >= 1.0 || q.y <= 0.0 || q.y >= 1.0)
+        return 1.0;
+    float open = 0.0;
+    for (int a = -1; a <= 1; a++)
+        for (int b = -1; b <= 1; b++)
+            open += texture(uRainMask, vec3(q.xy + vec2(a, b) / 1024.0, q.z - 0.002));
+    return open / 9.0;
+}
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise2(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i), hash2(i + vec2(1, 0)), f.x), mix(hash2(i + vec2(0, 1)), hash2(i + vec2(1, 1)), f.x), f.y);
+}
+// Wet: darker, and on flat ground puddles that take the sky and the sun.
+vec3 wet_look(vec3 c, vec3 n, float sh, bool model) {
+    float open = rain_open(vWorld, n);
+    float up = clamp(n.y, 0.0, 1.0);
+    float wet = uRain.y * open * mix(model ? 0.5 : 0.55, 1.0, up);
+    if (wet <= 0.001)
+        return c;
+    c *= mix(1.0, 0.6, wet);
+    if (model)
+        return c;
+    // Puddles where flat ground dips (noise), with rings where drops fall.
+    float puddle = smoothstep(0.45, 0.7, noise2(vWorld.xz * 0.6)) * smoothstep(0.85, 0.97, up) * wet;
+    vec3 v = normalize(uEye - vWorld);
+    float ring = 0.0;
+    if (uRain.x > 0.01) {
+        vec2 cell = floor(vWorld.xz * 2.0);
+        float phase = fract(uRain.z * 1.3 + hash2(cell) * 7.0);
+        float dist = length(fract(vWorld.xz * 2.0) - 0.5 - (vec2(hash2(cell + 3.1), hash2(cell + 7.7)) - 0.5) * 0.4);
+        ring = (1.0 - smoothstep(0.0, 0.04, abs(dist - phase * 0.45))) * (1.0 - phase) * uRain.x;
+    }
+    vec3 nn = normalize(n + vec3(ring * 0.15, 0.0, ring * 0.15));
+    float fresnel = 0.04 + 0.96 * pow(1.0 - clamp(dot(v, nn), 0.0, 1.0), 5.0);
+    vec3 sky = uFogColor;
+    vec3 L = normalize(uSunDir.xyz);
+    float spec = pow(max(dot(reflect(-v, nn), L), 0.0), 60.0) * (1.0 - sh) * (1.0 - uRain.x * 0.7);
+    float sheen = max(puddle, wet * up * 0.25);
+    return mix(c, sky * 0.9, fresnel * sheen * 0.85) + uSunCol * spec * sheen * 0.8 + vec3(ring * puddle * 0.08);
+}
 float in_shadow(vec3 p, float bias) {
     vec3 q = (uShadowMat * vec4(p, 1.0)).xyz * 0.5 + 0.5;
     if (q.x <= 0.0 || q.x >= 1.0 || q.y <= 0.0 || q.y >= 1.0 || q.z >= 1.0)
@@ -201,6 +255,16 @@ float in_shadow(vec3 p, float bias) {
 void main() {
     // (Before any discard: derivatives need every pixel of the quad.)
     float bumped = uKind == 2 && uBump.x > 0.0 ? bump_light(vUv) : 1.0;
+    if (uKind == 3 && uBump.x > 0.0 && uBump.z > 0.0) {
+        // Characters: much less on skin (faces, hands) — painted features
+        // read as dents.  Skin by its colour (YCbCr's usual ranges).
+        vec3 s = texture(uTex, vUv).rgb;
+        float cb = -0.1687 * s.r - 0.3313 * s.g + 0.5 * s.b + 0.5;
+        float cr = 0.5 * s.r - 0.4187 * s.g - 0.0813 * s.b + 0.5;
+        float skin = smoothstep(0.28, 0.33, cb) * (1.0 - smoothstep(0.49, 0.54, cb)) *
+                     smoothstep(0.51, 0.55, cr) * (1.0 - smoothstep(0.67, 0.71, cr)) * step(0.12, s.r);
+        bumped = 1.0 + (bump_light(vUv) - 1.0) * uBump.z * (1.0 - 0.8 * skin);
+    }
     vec3 faceN = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
     if (dot(faceN, uEye - vWorld) < 0.0) faceN = -faceN;       // (the side that is seen)
     vec4 t = texture(uTex, vUv);
@@ -209,7 +273,25 @@ void main() {
     if (uCutout == 1) c.a = vColor.a;
     else if (uCutout == 2 && t.a >= 0.5) discard;
     c = clamp(c, 0.0, 1.0);
-    if (uKind >= 2) {
+    if (uKind == 1 && uRain.x > 0.0) {
+        // Overcast: the sky goes grey.
+        float l = dot(c.rgb, vec3(0.3, 0.59, 0.11));
+        c.rgb = mix(c.rgb, vec3(l * 0.8 + 0.08), 0.75 * uRain.x);
+    }
+    if (uKind == 5 && rain_open(vWorld, vec3(0.0)) < 0.5)
+        discard;                    // (no rain under a roof)
+    if (uKind == 4 || uKind == 5) {
+        // Dust shows by the light it catches: in a shadow it is dim, by a
+        // lantern it glows.
+        float sh = uShadowParams.y > 0.5 ? in_shadow(vWorld, 0.003) : 0.0;
+        c.rgb *= 1.0 - 0.75 * sh;
+        for (int i = 0; i < uLights; i++) {
+            vec3 d = vWorld - uLightPos[i].xyz;
+            float a = clamp(1.0 - dot(d, d) / (uLightPos[i].w * uLightPos[i].w), 0.0, 1.0);
+            c.rgb += uLightCol[i] * a * a * 0.8 * lantern_lit(i, vWorld, vec3(0.0));
+        }
+        c.rgb = clamp(c.rgb, 0.0, 1.0);
+    } else if (uKind >= 2) {
         c.rgb *= bumped;
         float sh = uShadowParams.y > 0.5 ? in_shadow(vWorld, uKind == 3 ? 0.004 : 0.0008) : 0.0;
         if (uShadowParams.y > 0.5) {
@@ -226,6 +308,9 @@ void main() {
             vec3 relit = clamp(t.rgb * tint * light * uUnbake.y, 0.0, 1.0) * bumped;
             c.rgb = mix(c.rgb, relit, uUnbake.x);
         }
+        if (uRain.y > 0.0)
+            c.rgb = wet_look(c.rgb, faceN, sh, uKind == 3);
+        c.rgb *= 1.0 - 0.18 * uRain.x;          // (overcast)
         if (uKind == 2) {
             // A lantern's pool of light is mostly painted into the map: a
             // shadow takes away a share of what is there (most near the
@@ -344,6 +429,8 @@ struct Cmd {
 struct WorldView {
     bool set = false;
     bool ambience = false, indoors = false, night = false;
+    int day = 0, period = 0;
+    std::vector<float> drips;           // n × {x, eave y, z, ground y}
     float wind[3] = {}, focus[3] = {};
     float ambient[3] = {1, 1, 1};
     float view[16], proj[16], sun[3], sunColour[3];
@@ -360,6 +447,7 @@ struct Frame {
         cmds.clear(); v2.clear(); v3.clear(); index.clear();
         world.set = world.ambience = false;
         world.lights.clear();
+        world.drips.clear();
     }
 };
 static Frame s_cur, s_prev;
@@ -497,13 +585,18 @@ static void size_frame() {
 static hal::gs::Lighting s_light;
 static bool  s_litFrame = false;        // this play: the world's lights are known
 static GLint s_uLShadow = -1, s_uLShadowMat = -1, s_uLShadowN = -1;
+static GLint s_uRain = -1, s_uRainMat = -1, s_uRainMask = -1;
+static GLuint s_rainFbo = 0, s_rainTex = 0;
+static float s_rain = 0.0f, s_wet = 0.0f;   // the weather now
+static double s_weatherClock = -1.0;
 static GLuint s_lanternFbo = 0, s_lanternTex = 0;
 static GLint s_uUnbake = -1, s_uAmbient = -1, s_uSunCol = -1, s_uEye = -1, s_uSunDir = -1, s_uBump = -1, s_uCutout = -1, s_uKind = -1, s_uShadowMat = -1, s_uShadowParams = -1, s_uLights = -1, s_uLightPos = -1, s_uLightCol = -1;
 static GLuint s_programShadow = 0, s_shadowFbo = 0, s_shadowTex = 0, s_noShadowTex = 0;
 static GLint s_uShadowMvp = -1;
 static int s_shadowAlloc = 0;
-static GLuint s_emptyVao = 0, s_pAo = 0, s_pBright = 0, s_pBlur = 0, s_pComp = 0;
+static GLuint s_emptyVao = 0, s_pAo = 0, s_pBright = 0, s_pBlur = 0, s_pComp = 0, s_pRays = 0;
 static GLuint s_postFbo = 0, s_postTex = 0, s_aoFbo = 0, s_aoTex = 0, s_bloomFbo[2] = {}, s_bloomTex[2] = {};
+static GLuint s_raysFbo = 0, s_raysTex = 0;
 static int s_postW = 0, s_postH = 0;
 static bool s_writeDist = false;        // this play: 3D views of the world write it
 static bool s_viewDist = false;         // the 3D view being played writes distances
@@ -593,6 +686,39 @@ void main() {
     o = vec4(c * smoothstep(uThreshold, uThreshold + 0.18, l), 1.0);
 }
 )";
+// God rays: from each pixel towards the sun on the screen, what is sky and
+// bright along the way, fading step by step (half size).
+static const char* kRaysFs = R"(#version 330 core
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uColor, uDepthT;
+uniform vec2 uSun;
+uniform vec4 uRay;          // reach, decay, strength, the frame's width / height
+void main() {
+    const int n = 48;
+    vec2 step_ = (vUv - uSun) * uRay.x / float(n);
+    vec2 uv = vUv;
+    float fall = 1.0;
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < n; i++) {
+        uv -= step_;
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
+            break;
+        float sky = step(1e8, texture(uDepthT, uv).r);     // (the distance buffer: the sky writes none)
+        vec3 c = texture(uColor, uv).rgb;
+        float bright = max(dot(c, vec3(0.3, 0.59, 0.11)) - 0.6, 0.0);
+        sum += c * sky * bright * fall;
+        fall *= uRay.y;
+    }
+    vec2 q = vUv - uSun;
+    q.x *= uRay.w;
+    // (Shafts show over what stands against the sky; on the sky itself they
+    // would only wash it out.)
+    float skyHere = step(1e8, texture(uDepthT, vUv).r);
+    o = vec4(sum / float(n) * uRay.z * 7.0 * mix(1.0, 0.25, skyHere) * (1.0 - smoothstep(0.0, 1.0, length(q))), 1.0);
+}
+)";
+
 static const char* kBlurFs = R"(#version 330 core
 in vec2 vUv;
 out vec4 o;
@@ -614,6 +740,8 @@ uniform vec2 uAoTexel;
 uniform vec4 uOn;           // ao, bloom strength, grade, the frame's width / height
 uniform vec4 uGrade;        // contrast, saturation, warmth, vignette
 uniform vec4 uDof;          // strength (0 off), focus distance (0: the middle's), the frame's height
+uniform sampler2D uRays;
+uniform vec3 uRaysOn;       // the sun's colour × strength (0: none)
 // Depth of field (photo mode): a disc of samples as wide as how far this
 // pixel is from the distance in focus; a sample nearer than the focus is
 // let spread over what is behind it, one behind is not let bleed forward.
@@ -657,6 +785,8 @@ void main() {
         c *= weight > 0.001 ? sum / weight : texture(uAoT, vUv).r;
     }
     c += texture(uBloom, vUv).rgb * uOn.y;
+    if (uRaysOn.x + uRaysOn.y + uRaysOn.z > 0.0)
+        c += texture(uRays, vUv).rgb * uRaysOn;
     if (uOn.z > 0.5) {
         c = clamp(c, 0.0, 1.0);
         float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -704,7 +834,7 @@ static GLuint colour_target(GLuint& fbo, GLuint& tex, int w, int h, GLenum forma
 static bool s_lightingHeld = false;     // F3
 static bool lighting_wanted() {
     return !s_lightingHeld && (s_light.shadows || s_light.ao || s_light.lanterns || s_light.bloom > 0.0f || s_light.grade ||
-                               s_light.dof > 0.0f);
+                               s_light.dof > 0.0f || s_light.weather != 1 || s_light.godRays > 0.0f);
 }
 static void lighting_init() {
     if (s_programShadow != 0)
@@ -717,7 +847,12 @@ static void lighting_init() {
     s_pBright = link(kScreenVs, kBrightFs);
     s_pBlur = link(kScreenVs, kBlurFs);
     s_pComp = link(kScreenVs, kCompFs);
+    s_pRays = link(kScreenVs, kRaysFs);
+    glUseProgram(s_pRays);
+    glUniform1i(glGetUniformLocation(s_pRays, "uColor"), 0);
+    glUniform1i(glGetUniformLocation(s_pRays, "uDepthT"), 1);
     glUseProgram(s_pComp);
+    glUniform1i(glGetUniformLocation(s_pComp, "uRays"), 4);
     glUniform1i(glGetUniformLocation(s_pComp, "uColor"), 0);
     glUniform1i(glGetUniformLocation(s_pComp, "uAoT"), 1);
     glUniform1i(glGetUniformLocation(s_pComp, "uBloom"), 2);
@@ -905,6 +1040,92 @@ static void lantern_pass(const Frame& f, const Frame* before, float t, const flo
     glEnable(GL_BLEND);
 }
 
+// ── Weather ────────────────────────────────────────────────────────────────
+// The game has none: rain is ours.  By itself (weather 0) each period of
+// each day rolls for rain; it eases in and out over seconds, and things stay
+// wet (and the eaves drip) a while after it stops.
+static float s_rainTarget = 0.0f;
+static void weather_step(const Frame& f, float t) {
+    const double clock = (double)f.number - 1.0 + (double)t;
+    float dt = s_weatherClock < 0.0 ? 0.0f : (float)((clock - s_weatherClock) / 30.0);
+    s_weatherClock = clock;
+    dt = dt < 0.0f ? 0.0f : dt > 0.2f ? 0.2f : dt;
+    if (!f.world.ambience)
+        return;
+    float target = 0.0f;
+    if (s_light.weather == 2) {
+        target = s_light.rainAmount;
+    } else if (s_light.weather == 0) {
+        u32 h = (u32)(f.world.day * 5 + f.world.period) * 2654435761u + 0x9E3779B9u;
+        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+        if ((float)(h % 1000) < s_light.rainChance * 1000.0f)
+            target = s_light.rainAmount * (0.55f + 0.45f * (float)((h >> 10) % 100) / 100.0f);
+    }
+    s_rainTarget = target;
+    s_rain += (target - s_rain) * (dt / 8.0f > 1.0f ? 1.0f : dt / 8.0f);
+    const float tau = s_rain > s_wet ? 20.0f : 60.0f;
+    s_wet += (s_rain - s_wet) * (dt / tau > 1.0f ? 1.0f : dt / tau);
+    if (s_rain < 0.001f) s_rain = 0.0f;
+    if (s_wet < 0.001f) s_wet = 0.0f;
+}
+// The map from straight above, 48 units round the player: what is under
+// something stays dry.  Row-vector; depth = how far below 40 above the player.
+static void rain_matrix(const float* focus, float* m) {
+    const float E = 24.0f, H = 80.0f, top = focus[1] + 40.0f;
+    const float out[16] = {1.0f / E, 0, 0, 0,  0, 0, -2.0f / H, 0,  0, 1.0f / E, 0, 0,
+                           -focus[0] / E, -focus[2] / E, 2.0f * top / H - 1.0f, 1};
+    memcpy(m, out, sizeof out);
+}
+static void rain_mask_pass(const Frame& f, const Frame* before, float t, const float* m) {
+    if (s_rainFbo == 0) {
+        glGenFramebuffers(1, &s_rainFbo);
+        glGenTextures(1, &s_rainTex);
+        glBindTexture(GL_TEXTURE_2D, s_rainTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 1024, 1024, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_rainFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_rainTex, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s_rainFbo);
+    glViewport(0, 0, 1024, 1024);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_BLEND);
+    glUseProgram(s_programShadow);
+    glUniformMatrix4fv(s_uShadowMvp, 1, GL_FALSE, m);
+    glBindVertexArray(s_vao3d);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo3d);
+    int kind = 0;
+    bool inTarget = false;
+    for (const Cmd& c : f.cmds) {
+        if (c.op == Op::TargetBegin) inTarget = true;
+        else if (c.op == Op::TargetEnd) inTarget = false;
+        else if (c.op == Op::Begin3D) kind = c.i;
+        else if (c.op == Op::End3D) kind = 0;
+        else if (c.op == Op::Mesh && kind == (int)hal::gs::View::Map && !inTarget && c.count > 0) {
+            float lo[3], hi[3];
+            mesh_box(c, before, lo, hi);
+            if (lo[0] <= hi[0] && box_outside(lo, hi, m, 1.0f))
+                continue;
+            const Vertex3* v = verts3(f, c, before, t);
+            glBindTexture(GL_TEXTURE_2D, c.tex);
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)c.count * sizeof(Vertex3)), v, GL_STREAM_DRAW);
+            glDrawArrays(gl_prim(c.prim), 0, c.count);
+        }
+    }
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_BLEND);
+}
+
 // Before a list is played: the shadow map, and what the 3D program needs to
 // know of the world's lights.
 static void lighting_begin(const Frame& f, const Frame* before, float t) {
@@ -913,7 +1134,7 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
     if (!s_litFrame)
         return;
     lighting_init();
-    if (s_light.ao || s_light.dof > 0.0f) {
+    if (s_light.ao || s_light.dof > 0.0f || s_light.godRays > 0.0f) {
         // The distance buffer: made on first use, the frame's size, beside
         // the colour (it is cleared with the frame and written by the
         // world's 3D views only — see dist_buffers).
@@ -941,14 +1162,28 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
         shadow_matrix(f.world, m);
         shadow_pass(f, before, t, m);
     }
+    weather_step(f, t);
+    const bool outdoors = f.world.ambience && !f.world.indoors;
+    const float rain = outdoors ? s_rain : 0.0f, wet = outdoors ? s_wet : 0.0f;
+    float rainMat[16] = {};
+    if (rain > 0.0f || wet > 0.0f) {
+        rain_matrix(f.world.focus, rainMat);
+        rain_mask_pass(f, before, t, rainMat);
+    }
     glUseProgram(s_program3d);
-    const float sun = f.world.sunColour[0] * 0.3f + f.world.sunColour[1] * 0.59f + f.world.sunColour[2] * 0.11f;
+    glUniform4f(s_uRain, rain, wet, (float)(s_weatherClock / 30.0), 0.0f);
+    glUniformMatrix4fv(s_uRainMat, 1, GL_FALSE, rainMat);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, s_rainTex);
+    glActiveTexture(GL_TEXTURE0);
+    const float sun = (f.world.sunColour[0] * 0.3f + f.world.sunColour[1] * 0.59f + f.world.sunColour[2] * 0.11f) *
+                      (1.0f - 0.7f * rain);         // (overcast: the sun's shadows fade)
     glUniform4f(s_uShadowParams, s_light.shadowStrength * (sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun),
                 shadows ? 1.0f : 0.0f, 1.0f / (float)s_light.shadowSize,
                 s_light.modelShadow);
     glUniformMatrix4fv(s_uShadowMat, 1, GL_FALSE, m);
     glUniform4f(s_uSunDir, f.world.sun[0], f.world.sun[1], f.world.sun[2], sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun);
-    glUniform4f(s_uBump, s_light.bump, s_light.bumpDepth, 0.0f, 0.0f);
+    glUniform4f(s_uBump, s_light.bump, s_light.bumpDepth, s_light.characterBump, 0.0f);
     {
         // Only by day and out of doors: a night map's painted light holds its
         // lanterns' pools (relit, the night went flat and bright — its light
@@ -1058,6 +1293,23 @@ static float frand(float a, float b) {
     s_dustRand = s_dustRand * 1664525u + 1013904223u;
     return a + (b - a) * (float)(s_dustRand >> 8) / 16777216.0f;
 }
+static void ensure_dot() {
+    if (s_dotTex == 0) {        // a soft round dot
+        std::vector<u8> px(32 * 32 * 4);
+        for (int y = 0; y < 32; y++)
+            for (int x = 0; x < 32; x++) {
+                const float dx = (x + 0.5f) / 16.0f - 1.0f, dy = (y + 0.5f) / 16.0f - 1.0f;
+                const float r = sqrtf(dx * dx + dy * dy);
+                const float a = r >= 1.0f ? 0.0f : (1.0f - r) * (1.0f - r);
+                u8* q = &px[(size_t)(y * 32 + x) * 4];
+                q[0] = q[1] = q[2] = 255;
+                q[3] = (u8)(a * 255.0f);
+            }
+        glGenTextures(1, &s_dotTex);
+        set_filter(s_dotTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 32, 32, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    }
+}
 static void dust_pass(const Frame& f, const Frame* before, float t) {
     const WorldView& w = f.world;
     if (s_light.dust <= 0.0f || !w.ambience)
@@ -1134,21 +1386,7 @@ static void dust_pass(const Frame& f, const Frame* before, float t) {
     if (s_motes.empty())
         return;
 
-    if (s_dotTex == 0) {        // a soft round dot
-        std::vector<u8> px(32 * 32 * 4);
-        for (int y = 0; y < 32; y++)
-            for (int x = 0; x < 32; x++) {
-                const float dx = (x + 0.5f) / 16.0f - 1.0f, dy = (y + 0.5f) / 16.0f - 1.0f;
-                const float r = sqrtf(dx * dx + dy * dy);
-                const float a = r >= 1.0f ? 0.0f : (1.0f - r) * (1.0f - r);
-                u8* q = &px[(size_t)(y * 32 + x) * 4];
-                q[0] = q[1] = q[2] = 255;
-                q[3] = (u8)(a * 255.0f);
-            }
-        glGenTextures(1, &s_dotTex);
-        set_filter(s_dotTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 32, 32, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    }
+    ensure_dot();
     const float* v = w.view;
     const float right[3] = {v[0], v[4], v[8]}, up[3] = {v[1], v[5], v[9]};
     float eye[3];           // (translation in the last row: row-vector convention)
@@ -1184,7 +1422,7 @@ static void dust_pass(const Frame& f, const Frame* before, float t) {
         for (int idx : {0, 1, 2, 0, 2, 3})
             q.push_back({corner[idx][0], corner[idx][1], corner[idx][2], uv[idx][0], uv[idx][1], r, g, b, a});
     }
-    state_3d(m, (float)s_width / s_lw, 0);
+    state_3d(m, (float)s_width / s_lw, 4);
     overlay(true);
     glBindTexture(GL_TEXTURE_2D, s_dotTex);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(q.size() * sizeof(Vertex3)), q.data(), GL_STREAM_DRAW);
@@ -1193,8 +1431,211 @@ static void dust_pass(const Frame& f, const Frame* before, float t) {
     state_2d();
 }
 
+// ── Rain, drips and the lanterns' moths ────────────────────────────────────
+// Drawn like the dust (the map's own view, in-betweens included): rain
+// streaks round the eye, slanted by the game's wind, that a roof keeps off
+// (kind 5: the shader drops what is under something); splashes where they
+// land; drops falling from the eaves (the game side finds those: a roofed
+// cell beside an open one); and at night, when it is dry, moths flitting
+// round the map's lanterns near the player.
+struct Drop { float p[3], v[3], age, life, ground; int kind; };   // 0 streak, 1 splash, 2 drip
+static std::vector<Drop> s_drops;
+static double s_rainClock = -1.0;
+static std::vector<float> s_dripTimers;
+static void quad_facing(std::vector<Vertex3>& q, const float* p, const float* ax, const float* ay, float r, float g,
+                        float b, float a) {
+    float c[4][3];
+    for (int k = 0; k < 3; k++) {
+        c[0][k] = p[k] - ax[k] - ay[k];
+        c[1][k] = p[k] + ax[k] - ay[k];
+        c[2][k] = p[k] + ax[k] + ay[k];
+        c[3][k] = p[k] - ax[k] + ay[k];
+    }
+    const float uv[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    for (int i : {0, 1, 2, 0, 2, 3})
+        q.push_back({c[i][0], c[i][1], c[i][2], uv[i][0], uv[i][1], r, g, b, a});
+}
+static void rain_pass(const Frame& f, const Frame* before, float t) {
+    const WorldView& w = f.world;
+    if (!w.ambience || w.indoors)
+        return;
+    const bool moths = w.night && s_rain < 0.05f && s_light.lanterns;
+    if (s_rain <= 0.0f && s_wet <= 0.05f && !moths)
+        return;
+    int at = -1;
+    for (size_t i = 0; i < f.cmds.size(); i++)
+        if (f.cmds[i].op == Op::Begin3D && f.cmds[i].i == (int)hal::gs::View::Map) { at = (int)i; break; }
+    if (at < 0)
+        return;
+    const Cmd& view = f.cmds[(size_t)at];
+    float m[16];
+    memcpy(m, view.f, sizeof m);
+    if (before != nullptr && view.match >= 0)
+        for (int k = 0; k < 16; k++)
+            m[k] = mix(before->cmds[(size_t)view.match].f[k], m[k], t);
+    const double clock = (double)f.number - 1.0 + (double)t;
+    float dt = s_rainClock < 0.0 || s_frozen ? 0.0f : (float)((clock - s_rainClock) / 30.0);
+    s_rainClock = clock;
+    dt = dt < 0.0f ? 0.0f : dt > 0.1f ? 0.1f : dt;
+    const float seconds = (float)(clock / 30.0);
+    const float* v = w.view;
+    float eye[3];
+    for (int k = 0; k < 3; k++)
+        eye[k] = -(v[12] * v[k * 4] + v[13] * v[k * 4 + 1] + v[14] * v[k * 4 + 2]);
+    const float right[3] = {v[0], v[4], v[8]}, up[3] = {v[1], v[5], v[9]}, back[3] = {v[2], v[6], v[10]};
+    const float ground = w.focus[1];
+    const float wind = w.wind[0] / 0.05f;
+
+    // Streaks: kept up to the rain's count round the eye.
+    int streaks = 0;
+    for (const Drop& d : s_drops) streaks += d.kind == 0;
+    const int want = (int)(900.0f * s_rain);
+    for (; streaks < want; streaks++) {
+        Drop d{};
+        d.kind = 0;
+        d.p[0] = eye[0] + frand(-11.0f, 11.0f);
+        d.p[2] = eye[2] + frand(-11.0f, 11.0f);
+        d.p[1] = ground + frand(0.0f, 9.0f);
+        d.v[0] = 1.2f * wind + frand(-0.2f, 0.2f);
+        d.v[1] = -frand(8.5f, 10.5f);
+        d.v[2] = frand(-0.2f, 0.2f);
+        d.life = 10.0f;
+        d.ground = ground;
+        s_drops.push_back(d);
+    }
+    // Splashes on open ground besides those of the streaks that come near.
+    for (int k = (int)(dt * 120.0f * s_rain) + (frand(0, 1) < dt * 120.0f * s_rain - (int)(dt * 120.0f * s_rain) ? 1 : 0);
+         k > 0; k--) {
+        Drop d{};
+        d.kind = 1;
+        d.p[0] = w.focus[0] + frand(-9.0f, 9.0f);
+        d.p[2] = w.focus[2] + frand(-9.0f, 9.0f);
+        d.p[1] = ground + 0.02f;
+        d.life = 0.3f;
+        s_drops.push_back(d);
+    }
+    // Drips from the eaves, while things are wet.
+    const size_t eaves = w.drips.size() / 4;
+    s_dripTimers.resize(eaves, 0.0f);
+    if (s_wet > 0.15f)
+        for (size_t i = 0; i < eaves; i++) {
+            s_dripTimers[i] -= dt;
+            if (s_dripTimers[i] > 0.0f)
+                continue;
+            s_dripTimers[i] = frand(0.4f, 1.6f) / (0.3f + s_wet);
+            const float* e = &w.drips[i * 4];
+            Drop d{};
+            d.kind = 2;
+            d.p[0] = e[0] + frand(-0.2f, 0.2f);
+            d.p[1] = e[1];
+            d.p[2] = e[2] + frand(-0.2f, 0.2f);
+            d.ground = e[3];
+            d.life = 3.0f;
+            s_drops.push_back(d);
+        }
+    std::vector<Drop> born;
+    for (Drop& d : s_drops) {
+        d.age += dt;
+        if (d.kind == 2)
+            d.v[1] -= 9.8f * dt;
+        if (d.kind != 1)
+            for (int k = 0; k < 3; k++)
+                d.p[k] += d.v[k] * dt;
+        if (d.kind != 1 && d.p[1] <= d.ground) {
+            if (d.kind == 2 || frand(0, 1) < 0.25f) {
+                Drop s{};
+                s.kind = 1;
+                s.p[0] = d.p[0]; s.p[1] = d.ground + 0.02f; s.p[2] = d.p[2];
+                s.life = 0.3f;
+                born.push_back(s);
+            }
+            d.age = d.life + 1.0f;
+        }
+        if (d.kind == 0) {
+            const float dx = d.p[0] - eye[0], dz = d.p[2] - eye[2];
+            if (dx * dx + dz * dz > 13.0f * 13.0f)
+                d.age = d.life + 1.0f;
+        }
+    }
+    s_drops.erase(std::remove_if(s_drops.begin(), s_drops.end(), [](const Drop& d) { return d.age > d.life; }),
+                  s_drops.end());
+    s_drops.insert(s_drops.end(), born.begin(), born.end());
+    if ((int)s_drops.size() > 3000)
+        s_drops.erase(s_drops.begin(), s_drops.begin() + ((long)s_drops.size() - 3000));
+
+    const float lum = w.sunColour[0] * 0.3f + w.sunColour[1] * 0.59f + w.sunColour[2] * 0.11f;
+    const float light = (0.45f + 0.55f * (lum > 1.0f ? 1.0f : lum < 0.0f ? 0.0f : lum)) * (w.night ? 0.5f : 1.0f);
+    std::vector<Vertex3> open, covered;     // (kind 5: hidden under roofs; kind 4: not)
+    for (const Drop& d : s_drops) {
+        if (d.kind == 0 || d.kind == 2) {
+            // A thin quad along the fall, turned to the eye about that line.
+            float len = sqrtf(d.v[0] * d.v[0] + d.v[1] * d.v[1] + d.v[2] * d.v[2]);
+            if (len < 0.001f) len = 0.001f;
+            const float stretch = d.kind == 0 ? 0.36f : 0.05f + 0.02f * len;
+            const float ax[3] = {d.v[0] / len * stretch, d.v[1] / len * stretch, d.v[2] / len * stretch};
+            const float to[3] = {eye[0] - d.p[0], eye[1] - d.p[1], eye[2] - d.p[2]};
+            float side[3] = {ax[1] * to[2] - ax[2] * to[1], ax[2] * to[0] - ax[0] * to[2], ax[0] * to[1] - ax[1] * to[0]};
+            const float sl = sqrtf(side[0] * side[0] + side[1] * side[1] + side[2] * side[2]);
+            const float width = d.kind == 0 ? 0.013f : 0.014f;
+            for (float& x : side) x = sl > 0 ? x / sl * width : 0.0f;
+            if (d.kind == 0)
+                quad_facing(open, d.p, side, ax, 0.8f * light, 0.85f * light, 0.9f * light, 0.3f * s_rain + 0.2f);
+            else
+                quad_facing(covered, d.p, side, ax, 0.8f * light, 0.85f * light, 0.9f * light, 0.55f);
+        } else {
+            // A splash: a little flat ring, growing and fading.
+            const float k = d.age / d.life, r = 0.03f + 0.12f * k;
+            const float ax[3] = {r, 0, 0}, az[3] = {0, 0, r};
+            quad_facing(open, d.p, ax, az, 0.85f * light, 0.9f * light, 0.95f * light, 0.35f * (1.0f - k));
+        }
+    }
+    if (moths) {
+        // A few moths round each of the map's lanterns near the player.
+        const int count = (int)(w.lights.size() / 8);
+        int lanterns = 0;
+        for (int i = 0; i < count && lanterns < 8; i++) {
+            const float* l = &w.lights[(size_t)i * 8];
+            const float dx = l[0] - w.focus[0], dz = l[2] - w.focus[2];
+            if (l[3] < 4.0f || dx * dx + dz * dz > 18.0f * 18.0f)
+                continue;
+            lanterns++;
+            for (int k = 0; k < 7; k++) {
+                const float s = (float)(i * 31 + k * 7);
+                const float a = seconds * (1.3f + 0.37f * (float)k) + s;
+                // (The light sits inside the lantern's body: they keep round
+                // and above its lit top, out of the box.)
+                const float r = 0.45f + 0.22f * sinf(s * 1.7f) + 0.1f * sinf(seconds * 3.1f + s);
+                const float p[3] = {l[0] + cosf(a) * r + 0.06f * sinf(seconds * 17.0f + s),
+                                    l[1] + 0.1f + 0.3f * sinf(seconds * (2.1f + 0.3f * (float)k) + s * 2.0f) +
+                                        0.06f * sinf(seconds * 23.0f + s),
+                                    l[2] + sinf(a * 1.13f) * r + 0.06f * cosf(seconds * 19.0f + s)};
+                const float h = 0.038f;
+                const float ax[3] = {right[0] * h, right[1] * h, right[2] * h}, ay[3] = {up[0] * h, up[1] * h, up[2] * h};
+                quad_facing(covered, p, ax, ay, 1.0f, 0.95f, 0.75f, 1.0f);
+            }
+        }
+    }
+    (void)back;
+    if (open.empty() && covered.empty())
+        return;
+    ensure_dot();
+    glBindTexture(GL_TEXTURE_2D, s_dotTex);
+    for (int pass = 0; pass < 2; pass++) {
+        const std::vector<Vertex3>& q = pass == 0 ? open : covered;
+        if (q.empty())
+            continue;
+        state_3d(m, (float)s_width / s_lw, pass == 0 ? 5 : 4);
+        overlay(true);
+        glBindTexture(GL_TEXTURE_2D, s_dotTex);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(q.size() * sizeof(Vertex3)), q.data(), GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)q.size());
+        overlay(false);
+    }
+    state_2d();
+}
+
 static void post_pass(const Frame& f) {
-    if (!(s_light.ao || s_light.bloom > 0.0f || s_light.grade || s_light.dof > 0.0f))
+    if (!(s_light.ao || s_light.bloom > 0.0f || s_light.grade || s_light.dof > 0.0f || s_light.godRays > 0.0f))
         return;
     const int W = s_physW, H = s_physH, hw = (W + 1) / 2, hh = (H + 1) / 2;
     if (s_postW != W || s_postH != H) {
@@ -1204,6 +1645,7 @@ static void post_pass(const Frame& f) {
         colour_target(s_aoFbo, s_aoTex, hw, hh, GL_RGBA8);
         colour_target(s_bloomFbo[0], s_bloomTex[0], hw, hh, GL_RGBA8);
         colour_target(s_bloomFbo[1], s_bloomTex[1], hw, hh, GL_RGBA8);
+        colour_target(s_raysFbo, s_raysTex, hw, hh, GL_RGBA8);
     }
     const float* p = f.world.proj;
     const float proj[4] = {p[0], p[5], p[10], p[14]};
@@ -1255,9 +1697,53 @@ static void post_pass(const Frame& f) {
             glDrawArrays(GL_TRIANGLES, 0, 3);
         }
     }
+    // God rays: where the sun is on the screen (the vertex shader's narrowing
+    // for a wide picture included); none when it is behind, in the rain, faint
+    // at night.
+    float raysOn[3] = {0.0f, 0.0f, 0.0f};
+    if (s_light.godRays > 0.0f && f.world.set) {
+        const float* v = f.world.view;
+        float eye[3];
+        for (int k = 0; k < 3; k++)
+            eye[k] = -(v[12] * v[k * 4] + v[13] * v[k * 4 + 1] + v[14] * v[k * 4 + 2]);
+        float L[3] = {f.world.sun[0], f.world.sun[1], f.world.sun[2]};
+        const float ll = sqrtf(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+        const float P[4] = {eye[0] + L[0] / (ll > 0 ? ll : 1) * 300.0f, eye[1] + L[1] / (ll > 0 ? ll : 1) * 300.0f,
+                            eye[2] + L[2] / (ll > 0 ? ll : 1) * 300.0f, 1.0f};
+        float vp[4] = {0, 0, 0, 0}, clip[4] = {0, 0, 0, 0};
+        for (int j = 0; j < 4; j++)
+            for (int i = 0; i < 4; i++)
+                vp[j] += P[i] * f.world.view[i * 4 + j];
+        for (int j = 0; j < 4; j++)
+            for (int i = 0; i < 4; i++)
+                clip[j] += vp[i] * f.world.proj[i * 4 + j];
+        if (clip[3] > 0.1f) {
+            const float sx = clip[0] / clip[3] * xscale, sy = clip[1] / clip[3];
+            const float off = sqrtf(sx * sx + sy * sy);
+            const float seen = off < 1.0f ? 1.0f : off > 2.0f ? 0.0f : 2.0f - off;   // fading as it leaves the screen
+            const float k = s_light.godRays * seen * (1.0f - s_rain) * (f.world.night ? 0.3f : 1.0f);
+            if (k > 0.001f) {
+                glBindFramebuffer(GL_FRAMEBUFFER, s_raysFbo);
+                glViewport(0, 0, hw, hh);
+                glUseProgram(s_pRays);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, s_distTex);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, s_fboTex);
+                glUniform2f(glGetUniformLocation(s_pRays, "uSun"), sx * 0.5f + 0.5f, sy * 0.5f + 0.5f);
+                glUniform4f(glGetUniformLocation(s_pRays, "uRay"), 0.85f, 0.965f, 1.0f, (float)W / (float)H);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+                for (int c = 0; c < 3; c++)
+                    raysOn[c] = k * (0.6f + 0.4f * f.world.sunColour[c]);
+            }
+        }
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, s_postFbo);
     glViewport(0, 0, W, H);
     glUseProgram(s_pComp);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, s_raysTex);
+    glUniform3fv(glGetUniformLocation(s_pComp, "uRaysOn"), 1, raysOn);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, s_fboTex);
     glActiveTexture(GL_TEXTURE1);
@@ -1637,6 +2123,7 @@ static void play(const Frame& f, const Frame* before, float t) {
         case Op::Post:
             if (s_litFrame && !s_inTarget) {
                 dust_pass(f, before, t);
+                rain_pass(f, before, t);
                 post_pass(f);
                 state_2d();
             }
@@ -1963,7 +2450,11 @@ void init(int width, int height, const char* title) {
     s_uLShadow = glGetUniformLocation(s_program3d, "uLShadow");
     s_uLShadowMat = glGetUniformLocation(s_program3d, "uLShadowMat");
     s_uLShadowN = glGetUniformLocation(s_program3d, "uLShadowN");
+    s_uRain = glGetUniformLocation(s_program3d, "uRain");
+    s_uRainMat = glGetUniformLocation(s_program3d, "uRainMat");
+    s_uRainMask = glGetUniformLocation(s_program3d, "uRainMask");
     glUseProgram(s_program3d);
+    glUniform1i(s_uRainMask, 3);        // (its own unit)
     glUniform1i(s_uLShadow, 2);         // (its own unit, always: a 2D-array shadow sampler)
     glUniform1i(s_uLShadowN, 0);
     s_uAmbient = glGetUniformLocation(s_program3d, "uAmbient");
@@ -2511,6 +3002,8 @@ void set_lighting(const Lighting& lighting) {
 Lighting lighting() { return s_light; }
 // (Only in a frame of the world: elsewhere — the character setup's preview —
 // the game's own shadow stays.)
+float rain_now() { return s_rain; }
+float wet_now() { return s_wet; }
 bool real_shadows() { return !s_lightingHeld && s_light.shadows && s_light.shadowStrength > 0.0f && s_cur.world.set; }
 bool lighting_held() { return s_lightingHeld; }
 bool toggle_lighting() {
@@ -2530,11 +3023,14 @@ void set_world(const float* view, const float* proj, const float* sunDir, const 
     w.lights.assign(lights, lights + (size_t)(n > 0 ? n : 0) * 8);
 }
 void world_post() { push(Op::Post); }
-void set_ambience(const float* wind, const float* focus, bool indoors, bool night) {
+void set_drips(const float* points, int n) { s_cur.world.drips.assign(points, points + (size_t)(n > 0 ? n : 0) * 4); }
+void set_ambience(const float* wind, const float* focus, bool indoors, bool night, int day, int period) {
     WorldView& w = s_cur.world;
     w.ambience = true;
     w.indoors = indoors;
     w.night = night;
+    w.day = day;
+    w.period = period;
     memcpy(w.wind, wind, sizeof w.wind);
     memcpy(w.focus, focus, sizeof w.focus);
 }

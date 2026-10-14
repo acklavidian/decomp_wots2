@@ -40,11 +40,14 @@ A mod loader ships with four mods switched on:
 - **Widescreen** — the 3D view opens out to the sides. 16:9, 21:9, whatever shape your window is.
 - **Resolution** — draw at 1080p, 4K, or as many lines as your window has, instead of the PS2's 448.
 - **FPS unlock** — 60, 120, 144 pictures a second. The game still thinks at 30; everything in between is interpolated.
-- **Modern lighting** — real sun shadows from every character and object, ambient occlusion, lanterns that light the street at night, bloom and a colour grade.
+- **Modern lighting** — real sun shadows from characters, objects and the town itself, ambient occlusion, bloom, god rays and a colour grade. At night the lanterns light the street, light the people walking past, and cast their soft shadows on the ground — with moths flitting round them.
+  - **Weather** — rain that rolls in by itself (or on F8): wet streets with puddles that catch the sky, splashes, eaves dripping after the shower, dry under the roofs, a grey sky.
+  - **Bump mapping** on stone, wood, tiles and clothes, and an optional **un-baked** mode that relights the whole town from its sun instead of its painted-in light.
+  - **Wind and dust** — the game's own gusts made visible: motes in the air, dust swept down the street.
 
 ![Without and with modern lighting: the first fight, and Amakaze by night](docs/lighting_native.png)
 
-Each is a folder with an `.ini` you can edit. Writing your own takes one header:
+Each is a folder with an `.ini` you can edit — or press **F5** in the game and move the sliders while you play; **Save** keeps them. Writing your own takes one header:
 replace any game file by dropping it in a folder, or load code that reads and
 writes the game's memory every frame. The guide is [`mods/README.md`](mods/README.md).
 **HD texture packs made for PCSX2 work as they are:** put the pack's `.dds` files in a
@@ -52,6 +55,14 @@ mod's `textures/` folder.
 
 **A level editor is built in too:** press F2 in the world to move, add and
 remove objects, paint where one can walk, and save the result as a mod.
+
+**Photo mode:** F7 freezes the world, hides the HUD and hands you a free camera
+with field of view, roll and depth of field; F12 saves the picture.
+
+**Sprint:** with your sword away, click the left stick (L3) while running.
+
+It runs lighter than it looks: everything out of view or beyond the fog is
+skipped before it reaches the graphics card.
 
 <div align="center">
 
@@ -104,6 +115,17 @@ themselves. Start it without an argument and it asks for the file in a window.
 | Guard (+ Square: kick) | R1 | W |
 | Camera | Right stick (R3: back behind) | J L / I K (V: back behind) |
 | Pause menu | Start | Enter |
+
+| Key | |
+|---|---|
+| F2 | Level editor |
+| F3 | Modern lighting off / on, to compare |
+| F4 | Print where you are (for bug reports) |
+| F5 | Graphics panel: FPS, lighting, weather, dust — live, with Save |
+| F6 | FPS unlock off / on |
+| F7 | Photo mode (F12 saves the picture) |
+| F8 | Weather: clear → rain → by itself |
+| F11 | Fullscreen |
 
 ## How it works
 

@@ -91,6 +91,8 @@ bool  sPhotoDofAuto = true;
 float sPhotoFocus = 5.0f;
 std::string sPhotoMsg;
 std::string sLightSaved;    // what the last save said
+std::string sToast;         // a line shown at the top for a moment (F8)
+u32 sToastUntil = 0;
 bool sPause = true;
 int  sMode = kObjects;
 std::string sStatus;
@@ -1182,10 +1184,19 @@ void lighting_panel() {
     if (ImGui::CollapsingHeader("Bump mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Strength##bump", &l.bump, 0.0f, 3.0f, l.bump > 0.0f ? "%.2f" : "off");
         ImGui::SliderFloat("Depth", &l.bumpDepth, 0.5f, 12.0f);
+        ImGui::SliderFloat("On characters##bump", &l.characterBump, 0.0f, 1.0f);
     }
     if (ImGui::CollapsingHeader("Un-bake the map's light", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Relit", &l.unbake, 0.0f, 1.0f, l.unbake > 0.0f ? "%.2f" : "baked");
         ImGui::SliderFloat("Exposure", &l.unbakeExposure, 0.1f, 1.5f);
+    }
+    if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen)) {
+        static const char* const kWeather[] = {"By itself", "Clear", "Rain"};
+        ImGui::Combo("Weather (F8)", &l.weather, kWeather, 3);
+        if (l.weather == 0)
+            ImGui::SliderFloat("Chance of rain", &l.rainChance, 0.0f, 1.0f);
+        ImGui::SliderFloat("How hard", &l.rainAmount, 0.1f, 2.0f);
+        ImGui::TextDisabled("Raining %.2f, wet %.2f", hal::gs::rain_now(), hal::gs::wet_now());
     }
     if (ImGui::CollapsingHeader("Wind and dust", ImGuiTreeNodeFlags_DefaultOpen))
         ImGui::SliderFloat("Dust", &l.dust, 0.0f, 3.0f, l.dust > 0.0f ? "%.2f" : "off");
@@ -1199,6 +1210,8 @@ void lighting_panel() {
         ImGui::Checkbox("...and the characters, casting their shadows", &l.lanternShadows);
         ImGui::SliderFloat("Strength##lantern", &l.lanternStrength, 0.0f, 3.0f);
     }
+    if (ImGui::CollapsingHeader("God rays", ImGuiTreeNodeFlags_DefaultOpen))
+        ImGui::SliderFloat("Strength##rays", &l.godRays, 0.0f, 2.0f, l.godRays > 0.0f ? "%.2f" : "off");
     if (ImGui::CollapsingHeader("Bloom and grade", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Bloom", &l.bloom, 0.0f, 1.5f, l.bloom > 0.0f ? "%.2f" : "off");
         ImGui::SliderFloat("Bloom threshold", &l.bloomThreshold, 0.3f, 1.0f);
@@ -1226,6 +1239,11 @@ void lighting_panel() {
                 {"bump", num(l.bump)},
                 {"bump_depth", num(l.bumpDepth)},
                 {"dust", num(l.dust)},
+                {"character_bump", num(l.characterBump)},
+                {"god_rays", num(l.godRays)},
+                {"weather", l.weather == 2 ? "rain" : l.weather == 1 ? "clear" : "auto"},
+                {"rain_chance", num(l.rainChance)},
+                {"rain_amount", num(l.rainAmount)},
                 {"unbake", num(l.unbake)},
                 {"unbake_exposure", num(l.unbakeExposure)},
                 {"ao", l.ao ? "1" : "0"},
@@ -1362,8 +1380,14 @@ void close_photo() {
 }
 
 void overlay() {
-    if (!sOpen && !sLightOpen && !sPhoto)
+    const bool toast = !sToast.empty() && SDL_GetTicks() < sToastUntil;
+    if (!sOpen && !sLightOpen && !sPhoto && !toast) {
+        if (!sToast.empty()) {
+            sToast.clear();
+            hal::gs::set_overlay(nullptr);
+        }
         return;
+    }
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
@@ -1373,11 +1397,21 @@ void overlay() {
         fly();
         photo_panel();
     }
+    if (toast) {
+        const ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 30.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.6f);
+        ImGui::Begin("##toast", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                            ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
+                                            ImGuiWindowFlags_NoNav);
+        ImGui::TextUnformatted(sToast.c_str());
+        ImGui::End();
+    }
     if (sLightOpen)
         lighting_panel();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    if (!sLightOpen && !sOpen && !sPhoto)   // (closed with its window's ×)
+    if (!sLightOpen && !sOpen && !sPhoto && !toast)    // (closed with its window's ×)
         close_lighting();
 }
 
@@ -1462,6 +1496,19 @@ bool event(const SDL_Event& ev) {
     if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F5) {
         if (sLightOpen) close_lighting();
         else open_lighting();
+        return true;
+    }
+    if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F8) {
+        // The weather: clear → rain → by itself → clear …
+        hal::gs::Lighting l = hal::gs::lighting();
+        l.weather = l.weather == 1 ? 2 : l.weather == 2 ? 0 : 1;
+        hal::gs::set_lighting(l);
+        static const char* const kSay[] = {"Weather: by itself (F8)", "Weather: clear (F8)", "Weather: rain (F8)"};
+        sToast = kSay[l.weather];
+        sToastUntil = SDL_GetTicks() + 2000;
+        ensure_imgui();
+        hal::gs::set_overlay(overlay);
+        printf("[weather] %s\n", sToast.c_str());
         return true;
     }
     if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F7) {

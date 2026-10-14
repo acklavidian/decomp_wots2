@@ -146,6 +146,8 @@ struct Lighting {
     float bump = 0.0f;              // bump mapping of the map's surfaces, heights from brightness: 0 = off
     float bumpDepth = 4.0f;         // how steep a step of brightness is
     float dust = 0.0f;
+    float characterBump = 0.0f;     // bump mapping on characters too: its share of the map's (0 … 1)
+    float godRays = 0.0f;           // shafts of light from the sun through the sky: 0 = off
     float unbake = 0.0f;            // the map relit (ambient + sun + real shadows) instead of its baked light: 0 … 1
     float unbakeExposure = 0.44f;    // brightness of the relit map
     float dof = 0.0f;               // depth of field (photo mode): 0 = off, 1 = strong
@@ -157,7 +159,10 @@ struct Lighting {
     float aoStrength = 1.0f, aoRadius = 0.35f;
     bool  lanterns = false;
     float lanternStrength = 1.0f, lanternRadius = 5.0f;
-    bool  lanternShadows = false;   // the lanterns nearest the player cast characters' shadows, and light them
+    bool  lanternShadows = false;
+    int   weather = 1;              // 0 by itself (a roll each period), 1 always clear, 2 always rain
+    float rainChance = 0.3f;        // weather 0: the chance of rain in a period
+    float rainAmount = 1.0f;        // how hard it rains   // the lanterns nearest the player cast characters' shadows, and light them
     float bloom = 0.0f;             // 0 = off
     float bloomThreshold = 0.78f;
     bool  grade = false;
@@ -177,13 +182,18 @@ void set_world(const float* view, const float* proj, const float* sunDir, const 
 // What the wind and dust need of a world frame (MapState_Draw): the game's
 // wind (the gust vector it gives cloth and smoke), where the player is, and
 // whether this is an interior.
-void set_ambience(const float* wind, const float* focus, bool indoors, bool night = false);
+void set_ambience(const float* wind, const float* focus, bool indoors, bool night = false, int day = 0, int period = 0);
+// Where water drips from eaves when it rains: n × {x, y of the eave, z, y of the ground below}.
+void set_drips(const float* points, int n);
 // The world is drawn (World_Draw, before the HUD): ambient occlusion, bloom
 // and the grade are applied here.
 void world_post();
 // True when the sun's shadows are being drawn in this frame (the game's own blob and
 // projected shadows then step aside).
 bool real_shadows();
+// The weather now: how hard it rains (0 … 1) and how wet things are.
+float rain_now();
+float wet_now();
 
 int frame_count();   // frames presented so far
 

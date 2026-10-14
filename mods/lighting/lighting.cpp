@@ -50,6 +50,15 @@ int wots2_mod_init(const Wots2Api* api) {
         api->set_bump(bump, number("bump_depth", 4.0f));
     if (api->version >= 3 && api->set_dust)
         api->set_dust(number("dust", 1.0f));
+    if (api->version >= 8 && api->set_character_bump) {
+        api->set_character_bump(number("character_bump", 0.5f));
+        api->set_god_rays(number("god_rays", 0.6f));
+    }
+    if (api->version >= 7 && api->set_weather) {
+        const char* w = api->setting(api, "weather", "auto");
+        const int mode = strcmp(w, "rain") == 0 ? 2 : strcmp(w, "clear") == 0 ? 1 : 0;
+        api->set_weather(mode, number("rain_chance", 0.3f), number("rain_amount", 1.0f));
+    }
     if (api->version >= 6 && api->set_lantern_shadows)
         api->set_lantern_shadows(flag("lantern_shadows", 1));
     if (api->version >= 5 && api->set_model_shadow)
