@@ -176,11 +176,16 @@ float lantern_lit(int i, vec3 p, vec3 n) {
     vec3 q = c.xyz / c.w * 0.5 + 0.5;
     if (q.x <= 0.0 || q.x >= 1.0 || q.y <= 0.0 || q.y >= 1.0 || q.z >= 1.0)
         return 1.0;
-    float texel = 1.0 / 1024.0, lit = 0.0;
-    for (int a = -1; a <= 1; a++)
-        for (int b = -1; b <= 1; b++)
-            lit += texture(uLShadow, vec4(q.xy + vec2(a, b) * texel * 1.5, float(i), q.z - 0.0015));
-    return lit / 9.0;
+    // Soft: a disc of 16 samples, wider the further from the lantern (a
+    // lantern is no point: its shadows spread as they go).
+    float far_ = length(p - uLightPos[i].xyz) / uLightPos[i].w;
+    float spread = (3.0 + 9.0 * clamp(far_, 0.0, 1.0)) / 1024.0;
+    float lit = 0.0;
+    for (int k = 0; k < 16; k++) {
+        float ang = float(k) * 2.39996, rad = sqrt((float(k) + 0.5) / 16.0);
+        lit += texture(uLShadow, vec4(q.xy + vec2(cos(ang), sin(ang)) * rad * spread, float(i), q.z - 0.0015));
+    }
+    return lit / 16.0;
 }
 float in_shadow(vec3 p, float bias) {
     vec3 q = (uShadowMat * vec4(p, 1.0)).xyz * 0.5 + 0.5;
@@ -233,12 +238,14 @@ void main() {
                 float lit = lantern_lit(i, vWorld, faceN);
                 c.rgb += t.rgb * uLightCol[i] * a * a * lit;
                 if (i < uLShadowN) {
-                    // (The painted pool reaches further than the light added.)
-                    float r = uLightPos[i].w * 1.6;
-                    dark = max(dark, (1.0 - lit) * sqrt(clamp(1.0 - dot(d, d) / (r * r), 0.0, 1.0)));
+                    // Fading with the distance from the lantern: gone a
+                    // quarter beyond the light's reach (its painted pool is a
+                    // little wider than the light added).
+                    float r = uLightPos[i].w * 1.25;
+                    dark = max(dark, (1.0 - lit) * clamp(1.0 - dot(d, d) / (r * r), 0.0, 1.0));
                 }
             }
-            c.rgb *= 1.0 - 0.65 * dark;
+            c.rgb *= 1.0 - 0.6 * dark;
         }
         else if (uKind == 3)
             // Characters and things: the lanterns with shadows light them too,
