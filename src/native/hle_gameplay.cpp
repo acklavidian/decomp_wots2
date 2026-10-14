@@ -351,6 +351,11 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
             printf("[light] sun %.2f %.2f %.2f from %.2f %.2f %.2f, ambient %.2f %.2f %.2f\n", sun.colour[0][0],
                    sun.colour[0][1], sun.colour[0][2], sun.dir[0][0], sun.dir[0][1], sun.dir[0][2], sun.ambient[0],
                    sun.ambient[1], sun.ambient[2]);
+        if (traceLight)
+            for (int i = 0; i < n; i++)
+                printf("[light] point %d at %.2f %.2f %.2f radius %.1f colour %.2f %.2f %.2f\n", i, lights[i * 8],
+                       lights[i * 8 + 1], lights[i * 8 + 2], lights[i * 8 + 3], lights[i * 8 + 4], lights[i * 8 + 5],
+                       lights[i * 8 + 6]);
         // For the wind and dust: the game's gust (the render manager's wind,
         // RenderMgr+0x50, set by World_Step from the gust generator) and the player.
         const u32 renderMgr = *guest::ptr<u32>(0x2EE684u);

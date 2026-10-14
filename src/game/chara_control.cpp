@@ -130,7 +130,15 @@ static int StickDirection(PadRoutine* self, float* out) {
     out[2] = (float)-((int)y - 0x80);
     out[1] = out[3] = 0.0f;
     ToWorld(out);
-    return (x < 0x20 || x > 0xE0 || y < 0x20 || y > 0xE0) ? 2 : 1;
+    // Native addition: a little hysteresis.  The original runs past 0x20 /
+    // 0xE0 on either axis and walks inside; a real stick eased back from a run
+    // hovers there and flipped between the two every few frames, each change
+    // a new motion (and a frame without a step: jitter).  Once running, it
+    // runs until the stick is back inside 0x34 / 0xCC.
+    static int sLast = 0;
+    const int edge = sLast == 2 ? 0x34 : 0x20;
+    sLast = (x < edge || x > 0x100 - edge || y < edge || y > 0x100 - edge) ? 2 : 1;
+    return sLast;
 }
 
 // 0x1C6FB0: a blow with the sword.

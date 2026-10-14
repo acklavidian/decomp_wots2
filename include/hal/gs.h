@@ -157,6 +157,7 @@ struct Lighting {
     float aoStrength = 1.0f, aoRadius = 0.35f;
     bool  lanterns = false;
     float lanternStrength = 1.0f, lanternRadius = 5.0f;
+    bool  lanternShadows = false;   // the lanterns nearest the player cast characters' shadows, and light them
     float bloom = 0.0f;             // 0 = off
     float bloomThreshold = 0.78f;
     bool  grade = false;

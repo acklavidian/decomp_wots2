@@ -1194,8 +1194,9 @@ void lighting_panel() {
         ImGui::SliderFloat("Strength##ao", &l.aoStrength, 0.0f, 2.0f);
         ImGui::SliderFloat("Radius", &l.aoRadius, 0.05f, 1.0f);
     }
-    if (ImGui::CollapsingHeader("Lanterns")) {
+    if (ImGui::CollapsingHeader("Lanterns", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Lanterns light the ground", &l.lanterns);
+        ImGui::Checkbox("...and the characters, casting their shadows", &l.lanternShadows);
         ImGui::SliderFloat("Strength##lantern", &l.lanternStrength, 0.0f, 3.0f);
     }
     if (ImGui::CollapsingHeader("Bloom and grade", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1231,6 +1232,7 @@ void lighting_panel() {
                 {"ao_strength", num(l.aoStrength)},
                 {"ao_radius", num(l.aoRadius)},
                 {"lanterns", l.lanterns ? "1" : "0"},
+                {"lantern_shadows", l.lanternShadows ? "1" : "0"},
                 {"lantern_strength", num(l.lanternStrength)},
                 {"bloom", num(l.bloom)},
                 {"bloom_threshold", num(l.bloomThreshold)},

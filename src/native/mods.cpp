@@ -169,6 +169,7 @@ void api_set_lighting(const Wots2Lighting* in) {
     l.dust = hal::gs::lighting().dust;
     l.unbake = hal::gs::lighting().unbake;
     l.modelShadow = hal::gs::lighting().modelShadow;
+    l.lanternShadows = hal::gs::lighting().lanternShadows;
     l.unbakeExposure = hal::gs::lighting().unbakeExposure;
     hal::gs::set_lighting(l);
 }
@@ -176,6 +177,11 @@ void api_set_bump(float strength, float depth) {
     hal::gs::Lighting l = hal::gs::lighting();
     l.bump = strength > 0.0f ? strength : 0.0f;
     l.bumpDepth = depth > 0.0f ? depth : 4.0f;
+    hal::gs::set_lighting(l);
+}
+void api_set_lantern_shadows(int on) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.lanternShadows = on != 0;
     hal::gs::set_lighting(l);
 }
 void api_set_model_shadow(float share) {
@@ -237,7 +243,8 @@ void load_mod(const std::string& root, const std::string& id) {
             mod->settings[key.substr(9)] = value;
     mod->api = {WOTS2_MOD_API_VERSION, mod->dir.c_str(), api_log, api_setting, api_get_video, api_set_video,
                 api_guest_ptr, api_hook, api_find, api_on_frame, api_pad_buttons, api_get_lighting, api_set_lighting,
-                api_set_map_shadows, api_set_bump, api_set_dust, api_set_unbake, api_set_model_shadow};
+                api_set_map_shadows, api_set_bump, api_set_dust, api_set_unbake, api_set_model_shadow,
+                api_set_lantern_shadows};
 
     int parts = 0;
     if (is_dir(dir + "/files")) {

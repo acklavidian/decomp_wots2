@@ -121,6 +121,11 @@ uniform vec3 uSunCol;
 uniform vec3 uEye;
 uniform vec4 uLightPos[16]; // xyz, radius
 uniform vec3 uLightCol[16];
+// Lantern shadows: the first uLShadowN of the lights have a shadow map each
+// (layers of uLShadow), seen from the lantern through uLShadowMat[i].
+uniform sampler2DArrayShadow uLShadow;
+uniform mat4 uLShadowMat[4];
+uniform int uLShadowN;
 layout(location = 0) out vec4 oColor;
 // (While the modern lighting's occlusion is on: the distance from the eye,
 // which — unlike the depth buffer — no depth bias has moved.)
@@ -161,6 +166,22 @@ float bump_light(vec2 uv) {
             + (dot(nb, up) - dot(n, up)) * 0.35;
     return clamp(1.0 + d * uBump.x, 0.55, 1.45);
 }
+// How much of lantern i reaches p (1 = all): perspective, so divided by w.
+float lantern_lit(int i, vec3 p, vec3 n) {
+    if (i >= uLShadowN)
+        return 1.0;
+    vec4 c = uLShadowMat[i] * vec4(p + n * 0.04, 1.0);
+    if (c.w <= 0.05)
+        return 1.0;
+    vec3 q = c.xyz / c.w * 0.5 + 0.5;
+    if (q.x <= 0.0 || q.x >= 1.0 || q.y <= 0.0 || q.y >= 1.0 || q.z >= 1.0)
+        return 1.0;
+    float texel = 1.0 / 1024.0, lit = 0.0;
+    for (int a = -1; a <= 1; a++)
+        for (int b = -1; b <= 1; b++)
+            lit += texture(uLShadow, vec4(q.xy + vec2(a, b) * texel * 1.5, float(i), q.z - 0.0015));
+    return lit / 9.0;
+}
 float in_shadow(vec3 p, float bias) {
     vec3 q = (uShadowMat * vec4(p, 1.0)).xyz * 0.5 + 0.5;
     if (q.x <= 0.0 || q.x >= 1.0 || q.y <= 0.0 || q.y >= 1.0 || q.z >= 1.0)
@@ -200,11 +221,34 @@ void main() {
             vec3 relit = clamp(t.rgb * tint * light * uUnbake.y, 0.0, 1.0) * bumped;
             c.rgb = mix(c.rgb, relit, uUnbake.x);
         }
-        if (uKind == 2)
+        if (uKind == 2) {
+            // A lantern's pool of light is mostly painted into the map: a
+            // shadow takes away a share of what is there (most near the
+            // lantern, none at the edge of its reach), as well as the light
+            // added here.
+            float dark = 0.0;
             for (int i = 0; i < uLights; i++) {
                 vec3 d = vWorld - uLightPos[i].xyz;
                 float a = clamp(1.0 - dot(d, d) / (uLightPos[i].w * uLightPos[i].w), 0.0, 1.0);
-                c.rgb += t.rgb * uLightCol[i] * a * a;
+                float lit = lantern_lit(i, vWorld, faceN);
+                c.rgb += t.rgb * uLightCol[i] * a * a * lit;
+                if (i < uLShadowN) {
+                    // (The painted pool reaches further than the light added.)
+                    float r = uLightPos[i].w * 1.6;
+                    dark = max(dark, (1.0 - lit) * sqrt(clamp(1.0 - dot(d, d) / (r * r), 0.0, 1.0)));
+                }
+            }
+            c.rgb *= 1.0 - 0.65 * dark;
+        }
+        else if (uKind == 3)
+            // Characters and things: the lanterns with shadows light them too,
+            // most on the side that faces the lantern (wrapped, so the flat
+            // faces of the derivative normal do not show).
+            for (int i = 0; i < uLShadowN && i < uLights; i++) {
+                vec3 d = vWorld - uLightPos[i].xyz;
+                float a = clamp(1.0 - dot(d, d) / (uLightPos[i].w * uLightPos[i].w), 0.0, 1.0);
+                float facing = 0.5 + 0.5 * dot(faceN, normalize(-d));
+                c.rgb += t.rgb * uLightCol[i] * a * a * facing * 0.6 * lantern_lit(i, vWorld, faceN);
             }
         c.rgb = clamp(c.rgb, 0.0, 1.0);
     }
@@ -445,6 +489,8 @@ static void size_frame() {
 //     pixels are blurred into a glow, and a grade is laid over the picture.
 static hal::gs::Lighting s_light;
 static bool  s_litFrame = false;        // this play: the world's lights are known
+static GLint s_uLShadow = -1, s_uLShadowMat = -1, s_uLShadowN = -1;
+static GLuint s_lanternFbo = 0, s_lanternTex = 0;
 static GLint s_uUnbake = -1, s_uAmbient = -1, s_uSunCol = -1, s_uEye = -1, s_uSunDir = -1, s_uBump = -1, s_uCutout = -1, s_uKind = -1, s_uShadowMat = -1, s_uShadowParams = -1, s_uLights = -1, s_uLightPos = -1, s_uLightCol = -1;
 static GLuint s_programShadow = 0, s_shadowFbo = 0, s_shadowTex = 0, s_noShadowTex = 0;
 static GLint s_uShadowMvp = -1;
@@ -771,6 +817,87 @@ static void shadow_pass(const Frame& f, const Frame* before, float t, const floa
     glEnable(GL_BLEND);
 }
 
+// ── Lantern shadows ────────────────────────────────────────────────────────
+// For up to four of the map's lanterns near the player: a 1024² depth map of
+// the characters and things seen from the lantern, looking at the player
+// (a 110° view: where the player is, is where they show).  Row-vector, like
+// the rest; perspective, so the shader divides by w.
+static void lantern_matrix(const float* light, const float* focus, float* m) {
+    const float E[3] = {light[0], light[1], light[2]};
+    float D[3] = {focus[0] - E[0], focus[1] + 1.0f - E[1], focus[2] - E[2]};
+    float len = sqrtf(D[0] * D[0] + D[1] * D[1] + D[2] * D[2]);
+    if (len < 0.01f) { D[0] = 0; D[1] = -1; D[2] = 0; len = 1; }
+    for (float& x : D) x /= len;
+    float R[3] = {D[2], 0.0f, -D[0]};
+    len = sqrtf(R[0] * R[0] + R[2] * R[2]);
+    if (len < 0.01f) { R[0] = 1; R[2] = 0; len = 1; }
+    for (float& x : R) x /= len;
+    const float U[3] = {R[1] * D[2] - R[2] * D[1], R[2] * D[0] - R[0] * D[2], R[0] * D[1] - R[1] * D[0]};
+    const float f = 1.0f / tanf(55.0f * 3.14159265f / 180.0f);
+    const float n = 0.1f, reach = light[3] * 2.0f + 6.0f;
+    const float A = (reach + n) / (reach - n), B = -2.0f * reach * n / (reach - n);
+    const auto dot = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    const float out[16] = {f * R[0], f * U[0], A * D[0], D[0],  f * R[1], f * U[1], A * D[1], D[1],
+                           f * R[2], f * U[2], A * D[2], D[2],
+                           -f * dot(E, R), -f * dot(E, U), -A * dot(E, D) + B, -dot(E, D)};
+    memcpy(m, out, sizeof out);
+}
+static void lantern_pass(const Frame& f, const Frame* before, float t, const float* ms, int count) {
+    if (s_lanternFbo == 0) {
+        glGenFramebuffers(1, &s_lanternFbo);
+        glGenTextures(1, &s_lanternTex);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, s_lanternTex);
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24, 1024, 1024, 4, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT,
+                     nullptr);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s_lanternFbo);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    glViewport(0, 0, 1024, 1024);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(2.0f, 4.0f);
+    glUseProgram(s_programShadow);
+    glBindVertexArray(s_vao3d);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo3d);
+    for (int layer = 0; layer < count; layer++) {
+        const float* m = ms + layer * 16;
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, s_lanternTex, 0, layer);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glUniformMatrix4fv(s_uShadowMvp, 1, GL_FALSE, m);
+        bool inTarget = false;
+        int kind = 0;
+        for (const Cmd& c : f.cmds) {
+            if (c.op == Op::TargetBegin) inTarget = true;
+            else if (c.op == Op::TargetEnd) inTarget = false;
+            else if (c.op == Op::Begin3D) kind = c.i;
+            else if (c.op == Op::End3D) kind = 0;
+            else if (c.op == Op::Mesh && kind == (int)hal::gs::View::Model && !inTarget && c.count > 0) {
+                float lo[3], hi[3];
+                mesh_box(c, before, lo, hi);
+                if (lo[0] <= hi[0] && box_outside(lo, hi, m, 1.0f))
+                    continue;
+                const Vertex3* v = verts3(f, c, before, t);
+                glBindTexture(GL_TEXTURE_2D, c.tex);
+                glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)c.count * sizeof(Vertex3)), v, GL_STREAM_DRAW);
+                glDrawArrays(gl_prim(c.prim), 0, c.count);
+            }
+        }
+    }
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_BLEND);
+}
+
 // Before a list is played: the shadow map, and what the 3D program needs to
 // know of the world's lights.
 static void lighting_begin(const Frame& f, const Frame* before, float t) {
@@ -837,6 +964,7 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
     glActiveTexture(GL_TEXTURE0);
     // The sixteen point lights nearest the middle of the view.
     int n = 0;
+    glUniform1i(s_uLShadowN, 0);
     if (s_light.lanterns) {
         const float* v = f.world.view;
         float centre[3];
@@ -850,6 +978,39 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
             nearest.push_back({d[0] * d[0] + d[1] * d[1] + d[2] * d[2], i});
         }
         std::sort(nearest.begin(), nearest.end());
+        // The ones that get shadows first: the map's own lanterns (radius 5;
+        // an effect's flash is 3) that reach the player.
+        int shadowed = 0;
+        if (s_light.lanternShadows && f.world.ambience) {
+            std::stable_partition(nearest.begin(), nearest.end(), [&](const std::pair<float, int>& e) {
+                const float* l = &f.world.lights[(size_t)e.second * 8];
+                const float dx = l[0] - f.world.focus[0], dy = l[1] - f.world.focus[1], dz = l[2] - f.world.focus[2];
+                const float reach = l[3] * s_light.lanternRadius / 5.0f + 2.0f;
+                return l[3] >= 4.0f && dx * dx + dy * dy + dz * dz < reach * reach;
+            });
+            for (const auto& e : nearest) {
+                const float* l = &f.world.lights[(size_t)e.second * 8];
+                const float dx = l[0] - f.world.focus[0], dy = l[1] - f.world.focus[1], dz = l[2] - f.world.focus[2];
+                const float reach = l[3] * s_light.lanternRadius / 5.0f + 2.0f;
+                if (shadowed < 4 && shadowed < 16 && l[3] >= 4.0f && dx * dx + dy * dy + dz * dz < reach * reach)
+                    shadowed++;
+                else
+                    break;
+            }
+        }
+        if (shadowed > 0) {
+            float ms[4 * 16];
+            for (int i = 0; i < shadowed; i++)
+                lantern_matrix(&f.world.lights[(size_t)nearest[(size_t)i].second * 8], f.world.focus, ms + i * 16);
+            lantern_pass(f, before, t, ms, shadowed);
+            glUseProgram(s_program3d);
+            glUniformMatrix4fv(s_uLShadowMat, shadowed, GL_FALSE, ms);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, s_lanternTex);
+            glActiveTexture(GL_TEXTURE0);
+            glUniform1i(s_uLShadow, 2);
+        }
+        glUniform1i(s_uLShadowN, shadowed);
         float pos[16][4], col[16][3];
         for (; n < 16 && n < (int)nearest.size(); n++) {
             const float* l = &f.world.lights[(size_t)nearest[(size_t)n].second * 8];
@@ -1792,6 +1953,12 @@ void init(int width, int height, const char* title) {
     s_uSunDir = glGetUniformLocation(s_program3d, "uSunDir");
     s_uBump = glGetUniformLocation(s_program3d, "uBump");
     s_uUnbake = glGetUniformLocation(s_program3d, "uUnbake");
+    s_uLShadow = glGetUniformLocation(s_program3d, "uLShadow");
+    s_uLShadowMat = glGetUniformLocation(s_program3d, "uLShadowMat");
+    s_uLShadowN = glGetUniformLocation(s_program3d, "uLShadowN");
+    glUseProgram(s_program3d);
+    glUniform1i(s_uLShadow, 2);         // (its own unit, always: a 2D-array shadow sampler)
+    glUniform1i(s_uLShadowN, 0);
     s_uAmbient = glGetUniformLocation(s_program3d, "uAmbient");
     s_uSunCol = glGetUniformLocation(s_program3d, "uSunCol");
     s_uEye = glGetUniformLocation(s_program3d, "uEye");

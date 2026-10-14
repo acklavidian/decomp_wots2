@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <initializer_list>
 #include <cstring>
+#include <map>
 
 extern "C" {
     void* MemAlloc(u32 size);                           // 0x100820
@@ -797,6 +798,22 @@ void CharaBody_Update(CharaBody* self, Skeleton* skeleton) {
     MotionPlayer* player = Player(self);
     const float frame = VirtualCall<float, MotionPlayer*, Skeleton*, float*, int>(player->vtable, 0x0C, player, skeleton,
                                                                                   self->travel, 1);
+    {
+        // Native addition: a new motion's first frame moves nothing (the
+        // player samples its start twice), so going from a run into a walk
+        // or back stopped dead for a frame — a jolt.  Between two of those,
+        // the step before is carried over for that frame.
+        struct Last { float t[4]; u32 flags; };
+        static std::map<u32, Last> sLast;
+        Last& last = sLast[guest::addr(self)];
+        const u32 moving = kActfRun | kActfWalk;
+        const bool still = self->travel[0] == 0.0f && self->travel[1] == 0.0f && self->travel[2] == 0.0f;
+        if (still && (self->actionFlags & moving) && (last.flags & moving) &&
+            (last.t[0] != 0.0f || last.t[2] != 0.0f))
+            memcpy(self->travel, last.t, sizeof last.t);
+        memcpy(last.t, self->travel, sizeof last.t);
+        last.flags = self->actionFlags;
+    }
     if (self->scriptLoops == 0) {
         if ((int)frame == -1 && player->lastFrame != (float)MotionPlayer_LoopStart(player)) {
             CharaBody_Settle(self);
