@@ -15,7 +15,15 @@ namespace texture_pack {
 
 // Index the replacement files under `dir` (any depth).  → how many.
 int add_dir(const std::string& dir);
-bool active();
+bool active();          // a pack is installed
+// Whether its pictures are used (F9, the F5 panel; [settings] on = in the
+// pack's mod.ini says how a run starts).  Off, find() answers 0 and the
+// textures decoded from the disc are used.  Every switch counts up
+// generation(): whatever keeps texture names for long (a map's runs) makes
+// them again when it changes.
+bool enabled();
+void set_enabled(bool on);
+int  generation();
 
 // XXH3-64 (seed 0), as PCSX2 hashes.
 u64 hash(const void* data, size_t size);

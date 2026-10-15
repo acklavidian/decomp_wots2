@@ -52,6 +52,7 @@ struct Mod {
     void* library = nullptr;
 };
 std::vector<Mod*> sMods;
+std::string sTexturePackDir;     // the mod that brought a texture pack
 struct FrameHook { void (*fn)(void*); void* user; };
 std::vector<FrameHook> sFrameHooks;
 
@@ -175,6 +176,8 @@ void api_set_lighting(const Wots2Lighting* in) {
     l.rainAmount = hal::gs::lighting().rainAmount;
     l.characterBump = hal::gs::lighting().characterBump;
     l.godRays = hal::gs::lighting().godRays;
+    l.moods = hal::gs::lighting().moods;
+    memcpy(l.mood, hal::gs::lighting().mood, sizeof l.mood);
     l.unbakeExposure = hal::gs::lighting().unbakeExposure;
     hal::gs::set_lighting(l);
 }
@@ -182,6 +185,18 @@ void api_set_bump(float strength, float depth) {
     hal::gs::Lighting l = hal::gs::lighting();
     l.bump = strength > 0.0f ? strength : 0.0f;
     l.bumpDepth = depth > 0.0f ? depth : 4.0f;
+    hal::gs::set_lighting(l);
+}
+void api_set_moods(int on) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.moods = on != 0;
+    hal::gs::set_lighting(l);
+}
+void api_set_mood(int which, const float values[10]) {
+    if (which < 0 || which >= hal::gs::kMoodCount)
+        return;
+    hal::gs::Lighting l = hal::gs::lighting();
+    memcpy(&l.mood[which].brightness, values, 10 * sizeof(float));
     hal::gs::set_lighting(l);
 }
 void api_set_character_bump(float share) {
@@ -267,7 +282,7 @@ void load_mod(const std::string& root, const std::string& id) {
                 api_guest_ptr, api_hook, api_find, api_on_frame, api_pad_buttons, api_get_lighting, api_set_lighting,
                 api_set_map_shadows, api_set_bump, api_set_dust, api_set_unbake, api_set_model_shadow,
                 api_set_lantern_shadows, api_set_weather,
-                api_set_character_bump, api_set_god_rays};
+                api_set_character_bump, api_set_god_rays, api_set_moods, api_set_mood};
 
     int parts = 0;
     if (is_dir(dir + "/files")) {
@@ -284,6 +299,13 @@ void load_mod(const std::string& root, const std::string& id) {
             const int n = texture_pack::add_dir(textures);
             printf("[mods] %s: %d replacement textures\n", id.c_str(), n);
             parts += n > 0;
+            if (n > 0) {
+                sTexturePackDir = dir;
+                // [settings] on = 0: the pack is there but a run starts without it (F9 switches).
+                const char* onEnv = getenv((env + "_ON").c_str());     // (WOTS2_MOD_<NAME>_ON, as for a mod's settings)
+                const std::string on = onEnv != nullptr ? onEnv : get("settings.on", "1");
+                texture_pack::set_enabled(!(on == "0" || on == "off" || on == "no"));
+            }
         }
     }
     const std::string library = dir + "/" + get("mod.library", id + WOTS2_MOD_SUFFIX);
@@ -340,6 +362,8 @@ void frame() {
     for (const FrameHook& hook : sFrameHooks)
         hook.fn(hook.user);
 }
+
+const char* texture_pack_dir() { return sTexturePackDir.c_str(); }
 
 const char* dir_of(const char* id) {
     for (const Mod* mod : sMods)

@@ -213,6 +213,38 @@ float noise2(vec2 p) {
     f = f * f * (3.0 - 2.0 * f);
     return mix(mix(hash2(i), hash2(i + vec2(1, 0)), f.x), mix(hash2(i + vec2(0, 1)), hash2(i + vec2(1, 1)), f.x), f.y);
 }
+// Rings where drops land: two layers of cells (turned and shifted from each
+// other so no grid shows), each cell a drop now and then at a random place,
+// rate and size, its ring reaching into the cells round it — so rings cross.
+float ripples(vec2 w) {
+    float sum = 0.0;
+    for (int layer = 0; layer < 2; layer++) {
+        float ang = layer == 0 ? 0.0 : 0.83;
+        vec2 p = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * w * (layer == 0 ? 4.1 : 3.3)
+               + (layer == 0 ? vec2(0.0) : vec2(17.3, 5.1));
+        vec2 base = floor(p);
+        for (int i = -1; i <= 1; i++)
+            for (int j = -1; j <= 1; j++) {
+                vec2 cell = base + vec2(i, j);
+                float h = hash2(cell + float(layer) * 41.0);
+                float rate = 0.7 + 0.9 * hash2(cell + 9.2);
+                float t = uRain.z * rate + h * 13.0;
+                float drop = mod(floor(t), 97.0);      // (kept small: sin() of large numbers is coarse on some GPUs)
+                float phase = fract(t);
+                // (each fall of this cell lands somewhere else, and some not at all)
+                float k = hash2(cell + drop * 1.37);
+                if (k < 0.35) continue;
+                vec2 centre = cell + vec2(hash2(cell + drop * 2.11 + 3.1), hash2(cell + drop * 3.7 + 7.7));
+                float size = 0.5 + 0.9 * k;
+                float r = phase * size;
+                float d = length(p - centre);
+                float width = 0.04 + 0.06 * phase;
+                float wob = 0.03 * (noise2(p * 9.0 + drop) - 0.5);
+                sum += (1.0 - smoothstep(0.0, width, abs(d + wob - r))) * (1.0 - phase) * (1.0 - phase) * (0.6 + 0.6 * k);
+            }
+    }
+    return min(sum, 1.2);
+}
 // Wet: darker, and on flat ground puddles that take the sky and the sun.
 vec3 wet_look(vec3 c, vec3 n, float sh, bool model) {
     float open = rain_open(vWorld, n);
@@ -226,13 +258,7 @@ vec3 wet_look(vec3 c, vec3 n, float sh, bool model) {
     // Puddles where flat ground dips (noise), with rings where drops fall.
     float puddle = smoothstep(0.45, 0.7, noise2(vWorld.xz * 0.6)) * smoothstep(0.85, 0.97, up) * wet;
     vec3 v = normalize(uEye - vWorld);
-    float ring = 0.0;
-    if (uRain.x > 0.01) {
-        vec2 cell = floor(vWorld.xz * 2.0);
-        float phase = fract(uRain.z * 1.3 + hash2(cell) * 7.0);
-        float dist = length(fract(vWorld.xz * 2.0) - 0.5 - (vec2(hash2(cell + 3.1), hash2(cell + 7.7)) - 0.5) * 0.4);
-        ring = (1.0 - smoothstep(0.0, 0.04, abs(dist - phase * 0.45))) * (1.0 - phase) * uRain.x;
-    }
+    float ring = uRain.x > 0.01 ? ripples(vWorld.xz) * uRain.x : 0.0;
     vec3 nn = normalize(n + vec3(ring * 0.15, 0.0, ring * 0.15));
     float fresnel = 0.04 + 0.96 * pow(1.0 - clamp(dot(v, nn), 0.0, 1.0), 5.0);
     vec3 sky = uFogColor;
@@ -282,13 +308,18 @@ void main() {
         discard;                    // (no rain under a roof)
     if (uKind == 4 || uKind == 5) {
         // Dust shows by the light it catches: in a shadow it is dim, by a
-        // lantern it glows.
+        // lantern it glows.  Rain (5) the more so: water is clear, it is the
+        // light in it that one sees — faint in shade, bright by a lantern.
         float sh = uShadowParams.y > 0.5 ? in_shadow(vWorld, 0.003) : 0.0;
-        c.rgb *= 1.0 - 0.75 * sh;
+        bool rain = uKind == 5;
+        c.rgb *= rain ? 0.55 * (1.0 - 0.85 * sh) : 1.0 - 0.75 * sh;
         for (int i = 0; i < uLights; i++) {
             vec3 d = vWorld - uLightPos[i].xyz;
             float a = clamp(1.0 - dot(d, d) / (uLightPos[i].w * uLightPos[i].w), 0.0, 1.0);
-            c.rgb += uLightCol[i] * a * a * 0.8 * lantern_lit(i, vWorld, vec3(0.0));
+            vec3 add = uLightCol[i] * a * a * (rain ? 2.4 : 0.8) * lantern_lit(i, vWorld, vec3(0.0));
+            c.rgb += add;
+            if (rain)
+                c.a = min(1.0, c.a + dot(add, vec3(0.3, 0.59, 0.11)) * 0.6);    // (lit drops show)
         }
         c.rgb = clamp(c.rgb, 0.0, 1.0);
     } else if (uKind >= 2) {
@@ -582,7 +613,8 @@ static void size_frame() {
 //     from the depth buffer (normals from the depths round a pixel, twelve
 //     samples in a disc: McGuire's "scalable ambient obscurance"), bright
 //     pixels are blurred into a glow, and a grade is laid over the picture.
-static hal::gs::Lighting s_light;
+static hal::gs::Lighting s_light;      // what is drawn with: the settings, the mood of the moment applied
+static hal::gs::Lighting s_base;       // the settings as set (what lighting() answers)
 static bool  s_litFrame = false;        // this play: the world's lights are known
 static GLint s_uLShadow = -1, s_uLShadowMat = -1, s_uLShadowN = -1;
 static GLint s_uRain = -1, s_uRainMat = -1, s_uRainMask = -1;
@@ -739,6 +771,7 @@ uniform sampler2D uColor, uAoT, uBloom, uDistT;
 uniform vec2 uAoTexel;
 uniform vec4 uOn;           // ao, bloom strength, grade, the frame's width / height
 uniform vec4 uGrade;        // contrast, saturation, warmth, vignette
+uniform float uBright;      // the mood's brightness
 uniform vec4 uDof;          // strength (0 off), focus distance (0: the middle's), the frame's height
 uniform sampler2D uRays;
 uniform vec3 uRaysOn;       // the sun's colour × strength (0: none)
@@ -784,6 +817,7 @@ void main() {
             }
         c *= weight > 0.001 ? sum / weight : texture(uAoT, vUv).r;
     }
+    c *= uBright;
     c += texture(uBloom, vUv).rgb * uOn.y;
     if (uRaysOn.x + uRaysOn.y + uRaysOn.z > 0.0)
         c += texture(uRays, vUv).rgb * uRaysOn;
@@ -1068,6 +1102,83 @@ static void weather_step(const Frame& f, float t) {
     if (s_rain < 0.001f) s_rain = 0.0f;
     if (s_wet < 0.001f) s_wet = 0.0f;
 }
+// ── Moods ──────────────────────────────────────────────────────────────────
+// The look by place, time of day and weather (Lighting::mood): the main
+// settings are the day out of doors; indoors, dawn (early morning), evening
+// and night (late night) replace them, eased in over a couple of seconds, and
+// the rain is laid over whichever by how hard it rains.
+static hal::gs::Mood s_moodNow;
+static bool s_moodSet = false;
+static double s_moodClock = -1.0;
+static const char* s_moodName = "day";
+static hal::gs::Mood mood_of(const hal::gs::Lighting& l) {
+    hal::gs::Mood m;
+    m.brightness = 1.0f;
+    m.contrast = l.contrast; m.saturation = l.saturation; m.warmth = l.warmth; m.vignette = l.vignette;
+    m.bloom = l.bloom; m.ao = l.aoStrength; m.shadow = l.shadowStrength; m.godRays = l.godRays; m.dust = l.dust;
+    return m;
+}
+static hal::gs::Mood mood_mix(const hal::gs::Mood& a, const hal::gs::Mood& b, float t) {
+    hal::gs::Mood m;
+    const float* pa = &a.brightness;
+    const float* pb = &b.brightness;
+    float* pm = &m.brightness;
+    for (int i = 0; i < 10; i++)
+        pm[i] = pa[i] + (pb[i] - pa[i]) * t;
+    return m;
+}
+static void apply_mood() {
+    if (!s_base.moods || !s_moodSet)
+        return;
+    s_light.contrast = s_moodNow.contrast;
+    s_light.saturation = s_moodNow.saturation;
+    s_light.warmth = s_moodNow.warmth;
+    s_light.vignette = s_moodNow.vignette;
+    s_light.bloom = s_moodNow.bloom;
+    s_light.aoStrength = s_moodNow.ao;
+    s_light.shadowStrength = s_moodNow.shadow;
+    s_light.godRays = s_moodNow.godRays;
+    s_light.dust = s_moodNow.dust;
+}
+static void mood_step(const Frame& f, float t) {
+    const double clock = (double)f.number - 1.0 + (double)t;
+    float dt = s_moodClock < 0.0 ? 1.0f : (float)((clock - s_moodClock) / 30.0);
+    s_moodClock = clock;
+    s_light = s_base;
+    if (!s_base.moods || !f.world.ambience) {
+        s_moodSet = false;
+        s_moodName = "day";
+        return;
+    }
+    hal::gs::Mood target = mood_of(s_base);
+    s_moodName = "day";
+    const int p = f.world.period;
+    if (f.world.indoors) {
+        target = s_base.mood[hal::gs::kMoodIndoors];
+        s_moodName = "indoors";
+    } else if (p == 0) {
+        target = s_base.mood[hal::gs::kMoodDawn];
+        s_moodName = "dawn";
+    } else if (p == 3) {
+        target = s_base.mood[hal::gs::kMoodEvening];
+        s_moodName = "evening";
+    } else if (p >= 4) {
+        target = s_base.mood[hal::gs::kMoodNight];
+        s_moodName = "night";
+    }
+    if (!f.world.indoors && s_rain > 0.0f)
+        target = mood_mix(target, s_base.mood[hal::gs::kMoodRain], s_rain / (s_base.rainAmount > 0.1f ? s_base.rainAmount : 1.0f) > 1.0f
+                                                                    ? 1.0f : s_rain / (s_base.rainAmount > 0.1f ? s_base.rainAmount : 1.0f));
+    if (!s_moodSet) {
+        s_moodNow = target;
+        s_moodSet = true;
+    } else {
+        const float k = dt / 2.0f;
+        s_moodNow = mood_mix(s_moodNow, target, k < 0.0f ? 0.0f : k > 1.0f ? 1.0f : k);
+    }
+    apply_mood();
+}
+
 // The map from straight above, 48 units round the player: what is under
 // something stays dry.  Row-vector; depth = how far below 40 above the player.
 static void rain_matrix(const float* focus, float* m) {
@@ -1129,6 +1240,8 @@ static void rain_mask_pass(const Frame& f, const Frame* before, float t, const f
 // Before a list is played: the shadow map, and what the 3D program needs to
 // know of the world's lights.
 static void lighting_begin(const Frame& f, const Frame* before, float t) {
+    weather_step(f, t);
+    mood_step(f, t);
     s_litFrame = f.world.set && lighting_wanted();
     s_writeDist = false;
     if (!s_litFrame)
@@ -1162,7 +1275,6 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
         shadow_matrix(f.world, m);
         shadow_pass(f, before, t, m);
     }
-    weather_step(f, t);
     const bool outdoors = f.world.ambience && !f.world.indoors;
     const float rain = outdoors ? s_rain : 0.0f, wet = outdoors ? s_wet : 0.0f;
     float rainMat[16] = {};
@@ -1340,9 +1452,11 @@ static void dust_pass(const Frame& f, const Frame* before, float t) {
     const float* c = w.focus;
     int motes = 0, sweeps = 0;
     for (const Mote& p : s_motes) (p.kind == 0 ? motes : sweeps)++;
-    const int wantMotes = (int)((w.indoors ? 40.0f : 90.0f) * s_light.dust);
+    // (No dust in the rain, and little while the ground is wet.)
+    const float dry = w.indoors ? 1.0f : (1.0f - s_rain) * (1.0f - 0.8f * s_wet);
+    const int wantMotes = (int)((w.indoors ? 40.0f : 90.0f) * s_light.dust * dry);
     const float sweepShare = w.indoors ? 0.0f : (s - 0.25f) / 0.75f;
-    const int wantSweeps = (int)(110.0f * s_light.dust * (sweepShare < 0 ? 0 : sweepShare > 1 ? 1 : sweepShare));
+    const int wantSweeps = (int)(110.0f * s_light.dust * dry * (sweepShare < 0 ? 0 : sweepShare > 1 ? 1 : sweepShare));
     for (; motes < wantMotes; motes++) {
         Mote p{};
         p.kind = 0;
@@ -1576,10 +1690,17 @@ static void rain_pass(const Frame& f, const Frame* before, float t) {
             const float to[3] = {eye[0] - d.p[0], eye[1] - d.p[1], eye[2] - d.p[2]};
             float side[3] = {ax[1] * to[2] - ax[2] * to[1], ax[2] * to[0] - ax[0] * to[2], ax[0] * to[1] - ax[1] * to[0]};
             const float sl = sqrtf(side[0] * side[0] + side[1] * side[1] + side[2] * side[2]);
-            const float width = d.kind == 0 ? 0.013f : 0.014f;
+            // Near the eye a streak would be a rope: thinner and fainter within
+            // 3 units, gone within 0.8 (a real drop that close is a blur).
+            const float dist = sqrtf(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
+            const float nearK = d.kind == 0 ? std::min(1.0f, std::max(0.0f, (dist - 0.8f) / 2.2f)) : 1.0f;
+            if (nearK <= 0.0f)
+                continue;
+            const float width = d.kind == 0 ? 0.004f + 0.008f * nearK : 0.014f;
             for (float& x : side) x = sl > 0 ? x / sl * width : 0.0f;
             if (d.kind == 0)
-                quad_facing(open, d.p, side, ax, 0.8f * light, 0.85f * light, 0.9f * light, 0.3f * s_rain + 0.2f);
+                quad_facing(open, d.p, side, ax, 0.8f * light, 0.85f * light, 0.9f * light,
+                            (0.3f * s_rain + 0.2f) * (0.35f + 0.65f * nearK));
             else
                 quad_facing(covered, d.p, side, ax, 0.8f * light, 0.85f * light, 0.9f * light, 0.55f);
         } else {
@@ -1757,6 +1878,7 @@ static void post_pass(const Frame& f) {
                 s_light.grade ? 1.0f : 0.0f, (float)W / (float)H);
     glUniform4f(glGetUniformLocation(s_pComp, "uGrade"), s_light.contrast, s_light.saturation, s_light.warmth,
                 s_light.vignette);
+    glUniform1f(glGetUniformLocation(s_pComp, "uBright"), s_base.moods && s_moodSet ? s_moodNow.brightness : 1.0f);
     glUniform4f(glGetUniformLocation(s_pComp, "uDof"), s_writeDist ? s_light.dof : 0.0f, s_light.dofFocus, (float)H, 0.0f);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE1);
@@ -2994,12 +3116,15 @@ void begin_3d(const float* mvp, View kind, u32 who) {
 }
 
 void set_lighting(const Lighting& lighting) {
-    s_light = lighting;
-    s_light.shadowSize = s_light.shadowSize < 256 ? 256 : s_light.shadowSize > 8192 ? 8192 : s_light.shadowSize;
-    s_light.shadowReach = s_light.shadowReach < 2.0f ? 2.0f : s_light.shadowReach;
-    s_light.aoRadius = s_light.aoRadius < 0.05f ? 0.05f : s_light.aoRadius;
+    s_base = lighting;
+    s_base.shadowSize = s_base.shadowSize < 256 ? 256 : s_base.shadowSize > 8192 ? 8192 : s_base.shadowSize;
+    s_base.shadowReach = s_base.shadowReach < 2.0f ? 2.0f : s_base.shadowReach;
+    s_base.aoRadius = s_base.aoRadius < 0.05f ? 0.05f : s_base.aoRadius;
+    s_light = s_base;
+    apply_mood();
 }
-Lighting lighting() { return s_light; }
+Lighting lighting() { return s_base; }
+const char* mood_now() { return s_moodName; }
 // (Only in a frame of the world: elsewhere — the character setup's preview —
 // the game's own shadow stays.)
 float rain_now() { return s_rain; }

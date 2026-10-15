@@ -139,6 +139,14 @@ void  set_full_width();
 //                blow) light the ground round them, per pixel
 //   bloom        bright things glow
 //   grade        a gentle contrast curve, saturation, warmth and vignette
+// A mood: the look for a place, a time of day or the rain.  The main
+// settings are the day out of doors; the others replace these values when
+// they apply, blended in as they come (and the rain over whichever it is).
+struct Mood {
+    float brightness = 1.0f, contrast = 0.25f, saturation = 1.1f, warmth = 0.0f, vignette = 0.25f;
+    float bloom = 0.35f, ao = 1.0f, shadow = 0.55f, godRays = 0.6f, dust = 1.0f;
+};
+enum { kMoodDawn, kMoodEvening, kMoodNight, kMoodIndoors, kMoodRain, kMoodCount };
 struct Lighting {
     bool  shadows = false;
     bool  mapShadows = false;       // the map's own geometry casts them too (its lighting is baked)
@@ -148,6 +156,8 @@ struct Lighting {
     float dust = 0.0f;
     float characterBump = 0.0f;     // bump mapping on characters too: its share of the map's (0 … 1)
     float godRays = 0.0f;           // shafts of light from the sun through the sky: 0 = off
+    bool  moods = false;            // the looks below take over by place, time and weather
+    Mood  mood[kMoodCount];
     float unbake = 0.0f;            // the map relit (ambient + sun + real shadows) instead of its baked light: 0 … 1
     float unbakeExposure = 0.44f;    // brightness of the relit map
     float dof = 0.0f;               // depth of field (photo mode): 0 = off, 1 = strong
@@ -193,6 +203,9 @@ void world_post();
 bool real_shadows();
 // The weather now: how hard it rains (0 … 1) and how wet things are.
 float rain_now();
+// The mood the picture is in now (for the panel): which applies most, and
+// how far the rain is laid over it.
+const char* mood_now();
 float wet_now();
 
 int frame_count();   // frames presented so far

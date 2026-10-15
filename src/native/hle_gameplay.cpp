@@ -109,6 +109,10 @@ struct NativeMap {
     float waterHeight = -0.5f;
     int   waterFrame = 0;
     float waterScroll = 0.0f;
+    // A door's room, asked for (MapState_LoadNext) but not yet in use: the
+    // original reads it into a second loader and goes on drawing the street
+    // until World_EnterMap sets the indoors flag (*0x2EE518) behind the black.
+    int   pending = -1;
 };
 std::map<void*, NativeMap*> g_maps;
 NativeMap* g_currentMap = nullptr;
@@ -268,15 +272,40 @@ void MapState_Dtor(void* self, int flag) {
     }
     free_object(self, flag);
 }
-void MapState_Load(void* self, int map)     { load_map(self, map); }
+// This stand-in keeps one map, so a door's room replaces the street only once
+// the indoors flag says the room is the one in use.  Swapped at once, the
+// street vanished while the screen was still wiping to black: the room's fog
+// colour round the street's people (GitHub issue #3).
+static void settle(void* self) {
+    NativeMap* m = g_maps[self];
+    if (m && m->pending != -1 && *guest::ptr<s32>(0x2EE518u) == 1) {
+        const int map = m->pending;
+        m->pending = -1;
+        load_map(self, map);
+    }
+}
+static void load_now(void* self, int map) {
+    if (NativeMap* m = g_maps[self])
+        m->pending = -1;
+    load_map(self, map);
+}
+void MapState_Load(void* self, int map)     { load_now(self, map); }
 void MapState_SetCurrent(void*, int)        {}
-int  MapState_IsLoaded(void*)               { return 1; }
-void MapState_LoadNext(void* self, int map) { load_map(self, map); }
+int  MapState_IsLoaded(void* self)          { settle(self); return 1; }
+void MapState_LoadNext(void* self, int map) {
+    NativeMap* m = g_maps[self];
+    if (m && *guest::ptr<s32>(0x2EE518u) == 0) {
+        m->pending = map;
+        return;
+    }
+    load_now(self, map);
+}
 void MapState_SetNext(void*, int)           {}
-void MapState_Return(void* self, int map)   { load_map(self, map); }
+void MapState_Return(void* self, int map)   { load_now(self, map); }
 void MapState_BeginDraw(void*, void*)       {}
 void MapState_EndDraw(void*)                {}
 u32  MapState_GetMap(void* self) {
+    settle(self);
     NativeMap* m = g_maps[self];
     return m ? m->collision : 0;
 }
@@ -287,6 +316,7 @@ extern "C" void Native_WorldPost() { hal::gs::world_post(); }
 extern "C" int Native_RealShadows() { return hal::gs::real_shadows() ? 1 : 0; }
 
 void MapState_Draw(void* self, const float*, void* stage, void*) {
+    settle(self);
     NativeMap* m = g_maps[self];
     if (!m)
         return;

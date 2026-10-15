@@ -26,6 +26,7 @@
 #include "native/archive.h"
 #include "native/guest.h"
 #include "native/mods.h"
+#include "native/texture_pack.h"
 #include "game/map_collision.h"
 #include "hal/gs.h"
 #include "hal/pad.h"
@@ -1156,6 +1157,41 @@ void fps_section() {
         ImGui::TextWrapped("%s", sFpsSaved.c_str());
 }
 
+// The texture pack (F9, and the panel): its pictures or the disc's own.
+std::string sPackSaved;
+
+void toggle_texture_pack() {
+    if (!texture_pack::active()) {
+        sToast = "No texture pack installed (F9)";
+    } else {
+        texture_pack::set_enabled(!texture_pack::enabled());
+        sToast = texture_pack::enabled() ? "HD textures: on (F9)" : "HD textures: off (F9)";
+    }
+    sToastUntil = SDL_GetTicks() + 2000;
+    printf("[textures] %s\n", sToast.c_str());
+}
+
+void texture_section() {
+    if (!texture_pack::active() || !ImGui::CollapsingHeader("Texture pack", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+    bool on = texture_pack::enabled();
+    if (ImGui::Checkbox("HD textures on (F9)", &on))
+        texture_pack::set_enabled(on);
+    const std::string dir = mods::texture_pack_dir();
+    if (!dir.empty() && ImGui::Button("Save##textures")) {
+        const std::string path = dir + "/mod.ini";
+        const bool ok = save_settings(path, {{"on", texture_pack::enabled() ? "1" : "0"}});
+        sPackSaved = ok ? "Saved to " + path : "Could not write " + path;
+        printf("[textures] %s\n", sPackSaved.c_str());
+    }
+    if (!dir.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("whether a run starts with them");
+    }
+    if (!sPackSaved.empty())
+        ImGui::TextWrapped("%s", sPackSaved.c_str());
+}
+
 void lighting_panel() {
     hal::gs::Lighting l = hal::gs::lighting();
     const hal::gs::Lighting before = l;
@@ -1165,6 +1201,7 @@ void lighting_panel() {
         return;
     }
     fps_section();
+    texture_section();
     ImGui::Separator();
     ImGui::Text("Modern lighting");
     bool on = !hal::gs::lighting_held();
@@ -1189,6 +1226,26 @@ void lighting_panel() {
     if (ImGui::CollapsingHeader("Un-bake the map's light", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Relit", &l.unbake, 0.0f, 1.0f, l.unbake > 0.0f ? "%.2f" : "baked");
         ImGui::SliderFloat("Exposure", &l.unbakeExposure, 0.1f, 1.5f);
+    }
+    if (ImGui::CollapsingHeader("Moods: by place, time and weather", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("On##moods", &l.moods);
+        ImGui::SameLine();
+        ImGui::TextDisabled("now: %s%s", hal::gs::mood_now(), hal::gs::rain_now() > 0.01f ? ", with rain" : "");
+        ImGui::TextDisabled("The sliders below are the day out of doors; these take over.");
+        static int which = 0;
+        static const char* const kMood[] = {"Dawn", "Evening", "Night", "Indoors", "Rain"};
+        ImGui::Combo("Edit", &which, kMood, 5);
+        hal::gs::Mood& m = l.mood[which];
+        ImGui::SliderFloat("Brightness##m", &m.brightness, 0.4f, 1.6f);
+        ImGui::SliderFloat("Contrast##m", &m.contrast, 0.0f, 1.0f);
+        ImGui::SliderFloat("Saturation##m", &m.saturation, 0.0f, 2.0f);
+        ImGui::SliderFloat("Warmth##m", &m.warmth, -1.0f, 1.0f);
+        ImGui::SliderFloat("Vignette##m", &m.vignette, 0.0f, 1.0f);
+        ImGui::SliderFloat("Bloom##m", &m.bloom, 0.0f, 1.5f);
+        ImGui::SliderFloat("Ambient occlusion##m", &m.ao, 0.0f, 2.0f);
+        ImGui::SliderFloat("Sun shadows##m", &m.shadow, 0.0f, 1.0f);
+        ImGui::SliderFloat("God rays##m", &m.godRays, 0.0f, 2.0f);
+        ImGui::SliderFloat("Dust##m", &m.dust, 0.0f, 3.0f);
     }
     if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen)) {
         static const char* const kWeather[] = {"By itself", "Clear", "Rain"};
@@ -1260,8 +1317,16 @@ void lighting_panel() {
                 {"warmth", num(l.warmth)},
                 {"vignette", num(l.vignette)},
             };
+            std::vector<std::pair<std::string, std::string>> all = values;
+            all.push_back({"moods", l.moods ? "1" : "0"});
+            static const char* const kName[5] = {"dawn", "evening", "night", "indoors", "rain"};
+            static const char* const kKey[10] = {"brightness", "contrast", "saturation", "warmth", "vignette",
+                                                 "bloom", "ao", "shadow", "god_rays", "dust"};
+            for (int m = 0; m < 5; m++)
+                for (int k = 0; k < 10; k++)
+                    all.push_back({std::string(kName[m]) + "." + kKey[k], num((&l.mood[m].brightness)[k])});
             const std::string path = dir + "/mod.ini";
-            sLightSaved = save_settings(path, values) ? "Saved to " + path : "Could not write " + path;
+            sLightSaved = save_settings(path, all) ? "Saved to " + path : "Could not write " + path;
             printf("[lighting] %s\n", sLightSaved.c_str());
         }
         ImGui::SameLine();
@@ -1496,6 +1561,12 @@ bool event(const SDL_Event& ev) {
     if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F5) {
         if (sLightOpen) close_lighting();
         else open_lighting();
+        return true;
+    }
+    if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F9) {
+        toggle_texture_pack();
+        ensure_imgui();
+        hal::gs::set_overlay(overlay);
         return true;
     }
     if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F8) {

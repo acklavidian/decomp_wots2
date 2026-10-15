@@ -11,5 +11,7 @@ void load_all();
 void frame();
 // The directory of a loaded mod (by its directory name), or "" if none is.
 const char* dir_of(const char* id);
+// The directory of the mod that brought a texture pack (the last, if several), or "".
+const char* texture_pack_dir();
 
 }  // namespace mods

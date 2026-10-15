@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define WOTS2_MOD_API_VERSION 8      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust; 4: set_unbake; 5: set_model_shadow; 6: set_lantern_shadows; 7: set_weather; 8: set_character_bump, set_god_rays */
+#define WOTS2_MOD_API_VERSION 9      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust; 4: set_unbake; 5: set_model_shadow; 6: set_lantern_shadows; 7: set_weather; 8: set_character_bump, set_god_rays; 9: set_moods, set_mood */
 
 /* What of the picture a mod may change (see include/hal/gs.h, Video). */
 typedef struct Wots2Video {
@@ -122,6 +122,13 @@ struct Wots2Api {
      * shafts of light from the sun (0 = off). */
     void (*set_character_bump)(float share);
     void (*set_god_rays)(float strength);
+    /* Version 9: moods — the look by place, time and weather.  The main
+     * settings are the day out of doors; `which` 0 dawn, 1 evening, 2 night,
+     * 3 indoors, 4 rain (laid over the others by how hard it rains); `values`
+     * are brightness, contrast, saturation, warmth, vignette, bloom, ambient
+     * occlusion, shadow strength, god rays, dust. */
+    void (*set_moods)(int on);
+    void (*set_mood)(int which, const float values[10]);
 };
 
 /* Exported by the mod.  0 = loaded; anything else: the mod is left out. */

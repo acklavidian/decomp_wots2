@@ -19,7 +19,7 @@ Switch a mod off with `enabled = 0` in its `mod.ini`; change what it does under
 | `widescreen` | The 3D view opened out to the sides — the same height of view, more to the left and right. | `aspect` = `auto` (the window's shape), `16:9`, `21:9`, a number; `hud` = `edges` (gauges, enemy plates and the HUD's text keep to the picture's edges) or `center` |
 | `resolution` | Draws the picture with more lines than the PS2's 448. | `internal` = `window` (as many as the window has), a number of lines (`1080`), or `2x`, `3x`…; `window` = `1920x1080`; `fullscreen` = `1` |
 | `fps_unlock` | Shows more than thirty pictures a second. | `fps` = `display` or a number (`60`, `120`…); `vsync` = `1` / `0` |
-| `lighting` | Modern lighting in the world: the sun's shadows of characters, swords and things (in place of the dark blots under their feet), ambient occlusion, the lanterns of the night maps lighting the ground, bloom, a colour grade. | `shadows`, `map_shadows` (the map's own carts, eaves and trees cast too), `character_shadow` (how dark the sun's shadow falls on characters, 0.6; 1 = like the map), `ao`, `character_bump` (the same on characters, much less on skin), `god_rays` (shafts of light from the sun), `bump` (relief on the map's surfaces, heights from the textures' brightness: 0 off, 1, 2 strong), `bump_depth`, `dust` (motes in the air and dust swept up by the game's own gusts: 0 off, 1, 2 a dusty day), `lantern_shadows` (the lanterns nearest you light the characters and cast their shadows), `weather` (`auto` — each part of each day may rain, `rain_chance` —, `rain`, `clear`) and `rain_amount` (rain: wet ground and puddles, splashes, dripping eaves, dry under roofs; moths round the lanterns on dry nights), `unbake` (0 the map's painted-in light … 1 relit by its sun, ambient and the real shadows — by day, out of doors), `unbake_exposure`, `lanterns`, `grade` = `1` / `0`; `shadow_strength`, `shadow_quality` (`low`, `high`, `ultra`); `ao_strength`, `ao_radius`; `lantern_strength`; `bloom` (0 = off), `bloom_threshold`; `contrast`, `saturation`, `warmth`, `vignette` |
+| `lighting` | Modern lighting in the world: the sun's shadows of characters, swords and things (in place of the dark blots under their feet), ambient occlusion, the lanterns of the night maps lighting the ground, bloom, a colour grade. | `shadows`, `map_shadows` (the map's own carts, eaves and trees cast too), `character_shadow` (how dark the sun's shadow falls on characters, 0.6; 1 = like the map), `ao`, `moods` (the look by place, time and weather: `dawn.`, `evening.`, `night.`, `indoors.` and `rain.` followed by `brightness`, `contrast`, `saturation`, `warmth`, `vignette`, `bloom`, `ao`, `shadow`, `god_rays` or `dust` — the plain settings are the day out of doors), `character_bump` (the same on characters, much less on skin), `god_rays` (shafts of light from the sun), `bump` (relief on the map's surfaces, heights from the textures' brightness: 0 off, 1, 2 strong), `bump_depth`, `dust` (motes in the air and dust swept up by the game's own gusts: 0 off, 1, 2 a dusty day), `lantern_shadows` (the lanterns nearest you light the characters and cast their shadows), `weather` (`auto` — each part of each day may rain, `rain_chance` —, `rain`, `clear`) and `rain_amount` (rain: wet ground and puddles, splashes, dripping eaves, dry under roofs; moths round the lanterns on dry nights), `unbake` (0 the map's painted-in light … 1 relit by its sun, ambient and the real shadows — by day, out of doors), `unbake_exposure`, `lanterns`, `grade` = `1` / `0`; `shadow_strength`, `shadow_quality` (`low`, `high`, `ultra`); `ao_strength`, `ao_radius`; `lantern_strength`; `bloom` (0 = off), `bloom_threshold`; `contrast`, `saturation`, `warmth`, `vignette` |
 
 **F11** switches between the window and the whole screen at any time.
 
@@ -42,6 +42,7 @@ Good to know:
   goes back.
 - **F8** changes the weather: clear → rain → by itself (a line at the top
   says which).  It is not saved; F5's Save keeps it.
+- **F9** switches an HD texture pack off and on (see "Texture packs").
 - **F6** switches the FPS unlock off (the game's own 30 pictures a second)
   and on again.
 - **F5** opens a panel with the FPS unlock (on / off, the rate, vsync) and
@@ -121,6 +122,12 @@ DXT3 or DXT5 are read (what PCSX2 packs use); PNG is not yet.  A pack only
 replaces what its author replaced; `WOTS2_TRACE_TEXTURES=1` prints every
 texture's name and whether the pack had it.
 
+**F9** switches the pack off and on while playing (the game's own textures
+and the pack's are both kept, so it is instant); the F5 panel has the same
+switch, and its **Save** writes `on = 1` / `0` under `[settings]` in the
+pack's `mod.ini` — whether a run starts with it.  (`enabled = 0` under
+`[mod]` leaves the pack out altogether.)
+
 ### Code
 
 The library exports one function and is built against
@@ -158,6 +165,7 @@ What the table gives a mod:
 | `set_lantern_shadows` | lanterns light the characters and cast their shadows (API version 6) |
 | `set_weather` | rain: by itself, never or always, and how hard (API version 7) |
 | `set_character_bump`, `set_god_rays` | bump mapping on characters; shafts of light from the sun (API version 8) |
+| `set_moods`, `set_mood` | the look by place, time of day and weather (API version 9) |
 | `guest_ptr(address)` | the game's memory: the PS2's addresses, as `config/globals.json` gives them |
 | `on_frame(fn, user)` | a call once every frame of the game |
 | `pad_buttons(port)` | the buttons held, as the game sees them |

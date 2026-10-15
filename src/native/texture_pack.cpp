@@ -127,7 +127,19 @@ int add_dir(const std::string& dir) {
 
 bool active() { return !sEntries.empty(); }
 
+static bool sOn = true;
+static int sGeneration = 0;
+bool enabled() { return sOn && !sEntries.empty(); }
+void set_enabled(bool on) {
+    if (on != sOn)
+        sGeneration++;
+    sOn = on;
+}
+int generation() { return sGeneration; }
+
 u32 find(u64 textureHash, u64 paletteHash, u32 bits) {
+    if (!sOn)
+        return 0;
     static const bool trace = getenv("WOTS2_TRACE_TEXTURES") != nullptr;
     auto it = sEntries.find(Key(textureHash, paletteHash, bits & 0x3FFF));
     if (trace)

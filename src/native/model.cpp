@@ -3,6 +3,7 @@
 
 #include "native/model.h"
 #include "native/archive.h"
+#include "native/texture_pack.h"
 #include "native/hle.h"
 #include "engine/motion.h"
 #include "hal/gs.h"
@@ -343,6 +344,8 @@ void Model::draw(const float* pose, sprites::Sheet* shared, const Lighting* ligh
     const bool fixed = pose == nullptr && light == nullptr && onlyFirst == 0 && onlyLast == (1 << 30);
     static std::vector<Batch> scratch;
     std::vector<Batch>& batches = fixed ? fixedBatches : scratch;
+    if (fixed && fixedBuilt && fixedGeneration != texture_pack::generation())
+        fixedBuilt = false;         // (the texture pack was switched: other textures)
     if (!fixed || !fixedBuilt) {
         batches.clear();
         for (int pass = 0; pass < 2; pass++)
@@ -447,6 +450,7 @@ void Model::draw(const float* pose, sprites::Sheet* shared, const Lighting* ligh
         }
         if (fixed)
             fixedBuilt = true;
+            fixedGeneration = texture_pack::generation();
     }
     for (const Batch& batch : batches) {
         if (batch.verts.empty())

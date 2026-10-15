@@ -541,12 +541,22 @@ void BuildMap(const Ref& o) {
     // frame it is asked for — and the scene counts on that: a door's script
     // starts a frame before the scene blacks the screen "while loading", so
     // a script that got as far as its Wipe(0) at once would have it undone.)
+    // Nor does a real load end before the scene has put the player at the
+    // door (GameplayScene_RunField → World_PlaceAtStart, a few frames after
+    // the switch): a door's script that places the player itself (the home:
+    // seated, the camera on them) had it undone a frame later and looked at
+    // the bare wall by the door.  So indoors it also waits for that, at most
+    // a second.
     RegWait(o, "WaitLoading", 0, nullptr, [](Frame& f) {
         if (f.phase == 0) {
             f.phase = 1;
             return (int)sol::kYield;
         }
-        return MapLoaded(sSelf) ? (int)sol::kEnd : (int)sol::kYield;
+        if (!MapLoaded(sSelf))
+            return (int)sol::kYield;
+        if (*guest::ptr<s32>(0x2EE518u) == 1 && TheWorld(sSelf)->placePlayer != 0 && f.phase++ < 30)
+            return (int)sol::kYield;
+        return (int)sol::kEnd;
     });
 }
 

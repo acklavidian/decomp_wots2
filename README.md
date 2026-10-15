@@ -43,7 +43,8 @@ A mod loader ships with four mods switched on:
 - **Modern lighting** — real sun shadows from characters, objects and the town itself, ambient occlusion, bloom, god rays and a colour grade. At night the lanterns light the street, light the people walking past, and cast their soft shadows on the ground — with moths flitting round them.
   - **Weather** — rain that rolls in by itself (or on F8): wet streets with puddles that catch the sky, splashes, eaves dripping after the shower, dry under the roofs, a grey sky.
   - **Bump mapping** on stone, wood, tiles and clothes, and an optional **un-baked** mode that relights the whole town from its sun instead of its painted-in light.
-  - **Wind and dust** — the game's own gusts made visible: motes in the air, dust swept down the street.
+  - **Wind and dust** — the game's own gusts made visible: motes in the air, dust swept down the street (none in the rain).
+  - **Moods** — a look of its own for dawn, evening, night, indoors and the rain, blended in as they come.
 
 ![Without and with modern lighting: the first fight, and Amakaze by night](docs/lighting_native.png)
 
@@ -51,7 +52,7 @@ Each is a folder with an `.ini` you can edit — or press **F5** in the game and
 replace any game file by dropping it in a folder, or load code that reads and
 writes the game's memory every frame. The guide is [`mods/README.md`](mods/README.md).
 **HD texture packs made for PCSX2 work as they are:** put the pack's `.dds` files in a
-mod's `textures/` folder.
+mod's `textures/` folder. F9 switches the pack off and on while you play.
 
 **A level editor is built in too:** press F2 in the world to move, add and
 remove objects, paint where one can walk, and save the result as a mod.
@@ -125,6 +126,7 @@ themselves. Start it without an argument and it asks for the file in a window.
 | F6 | FPS unlock off / on |
 | F7 | Photo mode (F12 saves the picture) |
 | F8 | Weather: clear → rain → by itself |
+| F9 | HD texture pack off / on |
 | F11 | Fullscreen |
 
 ## How it works

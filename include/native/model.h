@@ -85,6 +85,7 @@ struct Model {
     };
     std::vector<Batch> fixedBatches;
     bool fixedBuilt = false;
+    int  fixedGeneration = 0;   // texture_pack::generation() when they were made
 };
 
 // A motion pack (.mtp) — see tools/mtp.py for the format.

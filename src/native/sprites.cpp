@@ -292,27 +292,31 @@ u32 Sheet::texture_for(const Rect& rect) {
     if (rect.texture >= textures.size())
         return 0;
     Texture& t = textures[rect.texture];
+    // (Cached by palette and by whether the texture pack is on, so that
+    // switching it — F9 — finds both kinds ready.)
+    const int packOn = texture_pack::enabled() ? 0x10000 : 0;
     if (!t.direct.empty()) {
-        auto it = t.glTextures.find(0);
+        auto it = t.glTextures.find(packOn);
         if (it != t.glTextures.end())
             return it->second;
         if (t.packHashed)
             if (u32 tex = texture_pack::find(t.packHash, 0, t.packBits))
-                return t.glTextures[0] = tex;
+                return t.glTextures[packOn] = tex;
         std::vector<u8> rgba = t.direct;
         for (size_t i = 3; i < rgba.size(); i += 4) {
             u32 a = rgba[i] * 255u / 128u;          // GS alpha: 0x80 is opaque
             rgba[i] = (u8)(a > 255 ? 255 : a);
         }
         bleed_cutout(rgba, t.width, t.height);
-        return t.glTextures[0] = hal::gs::create_texture(rgba.data(), t.width, t.height);
+        return t.glTextures[packOn] = hal::gs::create_texture(rgba.data(), t.width, t.height);
     }
     if (t.indices.empty())
         return 0;
 
     const bool eightBit = t.psm == 0x13 || t.psm == 0x1B;
     const int clut = eightBit ? rect.clutOffset / 4 : rect.clutOffset;
-    auto it = t.glTextures.find(clut);
+    const int key = clut | packOn;
+    auto it = t.glTextures.find(key);
     if (it != t.glTextures.end())
         return it->second;
 
@@ -320,7 +324,7 @@ u32 Sheet::texture_for(const Rect& rect) {
     const size_t clutBytes = entries * 4;
     if ((size_t)(clut + 1) * clutBytes > t.clutRaw.size()) {
         fprintf(stderr, "[sprites] palette %d out of range\n", clut);
-        return t.glTextures[clut] = 0;
+        return t.glTextures[key] = 0;
     }
     u8 palette[256][4];
     const u8* raw = &t.clutRaw[(size_t)clut * clutBytes];
@@ -348,7 +352,7 @@ u32 Sheet::texture_for(const Rect& rect) {
                     between |= palette[i][3] != 0 && palette[i][3] < 0x80;
                 }
             hal::gs::set_cutout(tex, clear && opaque && !between);
-            return t.glTextures[clut] = tex;
+            return t.glTextures[key] = tex;
         }
     for (size_t i = 0; i < entries; i++) {
         u32 a = palette[i][3] * 255u / 128u;       // GS alpha: 0x80 is opaque
@@ -360,7 +364,7 @@ u32 Sheet::texture_for(const Rect& rect) {
         memcpy(&rgba[i * 4], palette[t.indices[i] & (entries - 1)], 4);
     bleed_cutout(rgba, t.width, t.height);
     u32 tex = hal::gs::create_texture(rgba.data(), t.width, t.height);
-    t.glTextures[clut] = tex;
+    t.glTextures[key] = tex;
     return tex;
 }
 

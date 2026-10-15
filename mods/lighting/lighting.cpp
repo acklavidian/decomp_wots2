@@ -1,6 +1,7 @@
 // Modern lighting: reads its settings and hands them to the game's graphics
 // layer (hal::gs::Lighting), which does the work.
 #include "wots2_mod.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -53,6 +54,32 @@ int wots2_mod_init(const Wots2Api* api) {
     if (api->version >= 8 && api->set_character_bump) {
         api->set_character_bump(number("character_bump", 0.5f));
         api->set_god_rays(number("god_rays", 0.6f));
+    }
+    if (api->version >= 9 && api->set_mood) {
+        // Moods: what the ini says, else a look of its own from the day's.
+        static const char* const kName[5] = {"dawn", "evening", "night", "indoors", "rain"};
+        static const char* const kKey[10] = {"brightness", "contrast", "saturation", "warmth", "vignette",
+                                             "bloom", "ao", "shadow", "god_rays", "dust"};
+        const float day[10] = {1.0f, l.contrast, l.saturation, l.warmth, l.vignette, l.bloom, l.ao_strength,
+                               l.shadow_strength, number("god_rays", 0.6f), number("dust", 1.0f)};
+        //                         bright  contrast        sat           warmth          vignette        bloom          ao             shadow         rays          dust
+        const float kDefault[5][10] = {
+            {0.95f, day[1],         day[2] * 0.95f, day[3] + 0.25f, day[4],         day[5] + 0.1f, day[6],        day[7] * 0.8f, day[8] * 1.5f, day[9] * 1.3f},
+            {0.95f, day[1] + 0.05f, day[2] * 1.05f, day[3] + 0.45f, day[4] + 0.05f, day[5] + 0.1f, day[6],        day[7] * 0.9f, day[8] * 1.5f, day[9]},
+            {1.0f,  day[1] + 0.05f, day[2] * 0.85f, day[3] - 0.15f, day[4] + 0.1f,  day[5] + 0.15f, day[6],       day[7] * 0.5f, day[8] * 0.3f, day[9] * 0.4f},
+            {1.0f,  day[1],         day[2],         day[3] + 0.15f, day[4] + 0.05f, day[5],        day[6] * 1.3f, day[7],        0.0f,          day[9] * 0.5f},
+            {0.9f,  day[1] - 0.1f,  day[2] * 0.8f,  day[3] - 0.2f,  day[4] + 0.05f, day[5] * 0.6f, day[6],        day[7] * 0.4f, 0.0f,          0.0f},
+        };
+        api->set_moods(flag("moods", 1));
+        for (int m = 0; m < 5; m++) {
+            float v[10];
+            for (int k = 0; k < 10; k++) {
+                char key[64];
+                snprintf(key, sizeof key, "%s.%s", kName[m], kKey[k]);
+                v[k] = number(key, kDefault[m][k]);
+            }
+            api->set_mood(m, v);
+        }
     }
     if (api->version >= 7 && api->set_weather) {
         const char* w = api->setting(api, "weather", "auto");
