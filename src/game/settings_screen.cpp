@@ -27,6 +27,13 @@ extern "C" {
 
 static const GuestPtrVar<GsDevice> gGsDevice{0x2EE670u};
 static const GuestPtrVar<Font>     gFont{0x2EE67Cu};
+
+// Native, not the game's: R1 opens the port's "Enhancements" page
+// (src/native/enhancements.cpp) as a third sub-screen.
+extern "C" void Native_EnhOpen();
+extern "C" int  Native_EnhUpdate();
+extern "C" void Native_EnhDraw();
+extern "C" void Native_EnhHint();
 static const GuestPtrVar<Config>   gConfig{0x2EE68Cu};
 
 enum { kAssetSettingsSprites = 0x56, kAssetSettingsParams = 0x57 };
@@ -284,7 +291,12 @@ void SettingsScreen_Start(SettingsScreen* self) {
 // ── 0x191F40 ──────────────────────────────────────────────────────────────
 static int SettingsScreen_UpdateMenu(SettingsScreen* self) {
     void* pad = PadMgr_Get();
-    (void)pad;      // the original fetches the repeat and pressed words here and ignores them
+    // (the original fetches the repeat and pressed words here and ignores them)
+    if (Pad_GetPressed(pad, 0) & 0x08) {        // (native: R1, the Enhancements page)
+        Native_EnhOpen();
+        self->sub = kSubEnhancements;
+        return 1;
+    }
 
     switch (SettingsPanel_Update(&self->panel)) {
     case kSettingsResetVolumes:
@@ -333,6 +345,10 @@ int SettingsScreen_Update(SettingsScreen* self) {
                 self->screenPos = 0;
                 self->sub = kSubNone;
             }
+            break;
+        case kSubEnhancements:
+            if (!Native_EnhUpdate())
+                self->sub = kSubNone;
             break;
         case kSubNone:
             return SettingsScreen_UpdateMenu(self);
@@ -407,10 +423,15 @@ int SettingsScreen_Draw(SettingsScreen* self) {
             ScreenPosScreen_Draw(guest::ptr<ScreenPosScreen>(self->screenPos), *gGsDevice, *gFont);
         break;
     case kSubNone:
+    case kSubEnhancements:
         ScreenLayout_Draw(guest::ptr<ScreenLayout>(self->layout));
         SpriteSet_Bind(guest::ptr<SpriteSet>(self->context.spriteSet));
         SettingsPanel_Draw(&self->panel);
         SettingsScreen_DrawHint(self);
+        if (self->sub == kSubEnhancements)
+            Native_EnhDraw();
+        else
+            Native_EnhHint();
         break;
     }
     return 1;

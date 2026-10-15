@@ -34,11 +34,14 @@
 #include "hal/pad.h"
 #include "hal/spu2.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <array>
 #include <set>
 #include <string>
 #include <vector>
@@ -113,6 +116,15 @@ struct NativeMap {
     // original reads it into a second loader and goes on drawing the street
     // until World_EnterMap sets the indoors flag (*0x2EE518) behind the black.
     int   pending = -1;
+    // The light painted into the ground (native, for the modern lighting's
+    // "characters take the ground's light"): half-unit cells, up to three
+    // floors each {height, brightness}; brightness 1 = the map's open ground.
+    struct Floor { float y, light; };
+    bool  groundBuilt = false;
+    float groundX0 = 0, groundZ0 = 0;
+    int   groundW = 0, groundH = 0;
+    std::vector<std::array<Floor, 3>> ground;
+    std::vector<u8> groundCount;
 };
 std::map<void*, NativeMap*> g_maps;
 NativeMap* g_currentMap = nullptr;
@@ -154,6 +166,9 @@ void load_map(void* state, int index) {
         m->clearColor = 0x80000000u | info->color[0] | (u32)info->color[1] << 8 | (u32)info->color[2] << 16;
         memcpy(m->fog, info->fog, sizeof m->fog);
         printf("[world] map %d: %s\n", index, guest::ptr<const char>(info->model));
+        m->groundBuilt = false;
+        m->ground.clear();
+        m->groundCount.clear();
         m->water.release();
         m->hasWater = false;
         std::vector<u8> water;
@@ -256,7 +271,9 @@ void* MapState_Ctor(void* mem) {
     g_maps[mem] = m;
     return mem;
 }
+extern "C" void hle_light_restore();
 void MapState_Dtor(void* self, int flag) {
+    hle_light_restore();        // (the death scene put the lights out: the next screen gets them back)
     auto it = g_maps.find(self);
     if (it != g_maps.end()) {
         if (g_currentMap == it->second)
@@ -315,18 +332,146 @@ extern "C" int Lights_Gather(float* out, int max);     // point_lights.cpp
 extern "C" void Native_WorldPost() { hal::gs::world_post(); }
 extern "C" int Native_RealShadows() { return hal::gs::real_shadows() ? 1 : 0; }
 
-void MapState_Draw(void* self, const float*, void* stage, void*) {
-    settle(self);
-    NativeMap* m = g_maps[self];
-    if (!m)
+// ── The ground's painted light (native) ───────────────────────────────────
+// A map's light is painted into its vertex colours; characters are lit by
+// the map's sun and ambient instead, so in a shaded corner they stood out
+// bright.  From the map's triangles (once its runs are made) every half-unit
+// cell gets the brightness of the floors in it — those facing up — and a
+// character is dimmed by the floor under its feet against the map's open
+// ground (the brightest fifth of its cells).
+static const float kGroundCell = 0.5f;
+static void build_ground(NativeMap* m) {
+    const model::Model& map = m->model;
+    if (!map.fixedBuilt)
+        return;                 // (not drawn yet: asked again next time)
+    m->groundBuilt = true;
+    float lo[2] = {1e9f, 1e9f}, hi[2] = {-1e9f, -1e9f};
+    for (const auto& b : map.fixedBatches)
+        for (const auto& v : b.verts) {
+            lo[0] = std::min(lo[0], v.x); hi[0] = std::max(hi[0], v.x);
+            lo[1] = std::min(lo[1], v.z); hi[1] = std::max(hi[1], v.z);
+        }
+    if (lo[0] > hi[0])
         return;
-    hal::gs::clear(m->clearColor);
-    // The map's fog (MapInfo+0xB0 = what the game hands GsDevice_SetFogParams),
-    // toward the clear colour.  WOTS2_NO_FOG=1 (debug) switches it off.
-    static const bool noFog = getenv("WOTS2_NO_FOG") != nullptr;
-    hal::gs::set_fog(!noFog && m->fog[3] > m->fog[2], m->fog[0], m->fog[1], m->fog[2], m->fog[3], m->clearColor);
-    // The view is the decompiled stage's: an eye, the way it looks, and up —
-    // unless the level editor is flying its own camera.
+    m->groundX0 = lo[0];
+    m->groundZ0 = lo[1];
+    m->groundW = std::min(2000, (int)((hi[0] - lo[0]) / kGroundCell) + 1);
+    m->groundH = std::min(2000, (int)((hi[1] - lo[1]) / kGroundCell) + 1);
+    m->ground.assign((size_t)m->groundW * m->groundH, {});
+    m->groundCount.assign((size_t)m->groundW * m->groundH, 0);
+    const auto lum = [](u32 c) {        // (map colours: 0x80 = 1.0)
+        return (0.3f * (float)(c & 0xFF) + 0.59f * (float)((c >> 8) & 0xFF) + 0.11f * (float)((c >> 16) & 0xFF)) / 128.0f;
+    };
+    for (const auto& b : map.fixedBatches) {
+        if (b.overlay)
+            continue;           // (blended decals over the ground)
+        for (size_t i = 0; i + 2 < b.verts.size(); i += 3) {
+            const hal::gs::Vtx3* t = &b.verts[i];
+            const float ux = t[1].x - t[0].x, uy = t[1].y - t[0].y, uz = t[1].z - t[0].z;
+            const float vx = t[2].x - t[0].x, vy = t[2].y - t[0].y, vz = t[2].z - t[0].z;
+            const float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+            const float nl = sqrtf(nx * nx + ny * ny + nz * nz);
+            if (nl <= 0.0f || fabsf(ny) / nl < 0.6f)
+                continue;       // walls and steep slopes
+            const float l0 = lum(t[0].rgba), l1 = lum(t[1].rgba), l2 = lum(t[2].rgba);
+            const float area = ux * vz - uz * vx;           // (twice the signed area in x / z)
+            if (fabsf(area) < 1e-6f)
+                continue;
+            const float minX = std::min({t[0].x, t[1].x, t[2].x}), maxX = std::max({t[0].x, t[1].x, t[2].x});
+            const float minZ = std::min({t[0].z, t[1].z, t[2].z}), maxZ = std::max({t[0].z, t[1].z, t[2].z});
+            const int cx0 = std::max(0, (int)((minX - m->groundX0) / kGroundCell));
+            const int cx1 = std::min(m->groundW - 1, (int)((maxX - m->groundX0) / kGroundCell));
+            const int cz0 = std::max(0, (int)((minZ - m->groundZ0) / kGroundCell));
+            const int cz1 = std::min(m->groundH - 1, (int)((maxZ - m->groundZ0) / kGroundCell));
+            for (int cz = cz0; cz <= cz1; cz++)
+                for (int cx = cx0; cx <= cx1; cx++) {
+                    const float px = m->groundX0 + (cx + 0.5f) * kGroundCell - t[0].x;
+                    const float pz = m->groundZ0 + (cz + 0.5f) * kGroundCell - t[0].z;
+                    const float s = (px * vz - pz * vx) / area, r = (ux * pz - uz * px) / area;
+                    if (s < -0.01f || r < -0.01f || s + r > 1.02f)
+                        continue;
+                    const float y = t[0].y + s * uy + r * vy;
+                    const float light = l0 + s * (l1 - l0) + r * (l2 - l0);
+                    const size_t at = (size_t)cz * m->groundW + cx;
+                    auto& floors = m->ground[at];
+                    u8& n = m->groundCount[at];
+                    int k = 0;
+                    while (k < n && fabsf(floors[k].y - y) > 0.3f)
+                        k++;
+                    if (k < n)
+                        floors[k] = {std::max(floors[k].y, y), light};   // (later ones lie on top)
+                    else if (n < 3)
+                        floors[n++] = {y, light};
+                }
+        }
+    }
+    // The open ground's brightness: the brightest fifth of the top floors.
+    std::vector<float> tops;
+    for (size_t i = 0; i < m->ground.size(); i++)
+        if (m->groundCount[i]) {
+            float best = -1e9f, light = 0;
+            for (int k = 0; k < m->groundCount[i]; k++)
+                if (m->ground[i][k].y > best) { best = m->ground[i][k].y; light = m->ground[i][k].light; }
+            tops.push_back(light);
+        }
+    if (tops.empty())
+        return;
+    std::nth_element(tops.begin(), tops.begin() + (long)(tops.size() * 4 / 5), tops.end());
+    const float open = std::max(0.05f, tops[tops.size() * 4 / 5]);
+    for (size_t i = 0; i < m->ground.size(); i++)
+        for (int k = 0; k < m->groundCount[i]; k++)
+            m->ground[i][k].light /= open;
+}
+// The ground's light under a point (1 = open ground; 1 where nothing is
+// known), the floor nearest below it within reach, over a 3 × 3 patch.
+extern "C" float hle_ground_light_at(const float* p) {
+    NativeMap* m = g_currentMap;
+    if (m == nullptr || hal::gs::ground_light() <= 0.0f)
+        return 1.0f;
+    if (!m->groundBuilt)
+        build_ground(m);
+    if (m->ground.empty())
+        return 1.0f;
+    const int cx = (int)floorf((p[0] - m->groundX0) / kGroundCell), cz = (int)floorf((p[2] - m->groundZ0) / kGroundCell);
+    float sum = 0.0f, weight = 0.0f;
+    for (int dz = -1; dz <= 1; dz++)
+        for (int dx = -1; dx <= 1; dx++) {
+            const int x = cx + dx, z = cz + dz;
+            if (x < 0 || z < 0 || x >= m->groundW || z >= m->groundH)
+                continue;
+            const size_t at = (size_t)z * m->groundW + x;
+            float best = -1e9f, light = 0.0f;
+            for (int k = 0; k < m->groundCount[at]; k++) {
+                const auto& f = m->ground[at][k];
+                if (f.y <= p[1] + 0.4f && f.y > p[1] - 1.5f && f.y > best) { best = f.y; light = f.light; }
+            }
+            if (best > -1e9f) {
+                const float w = dx == 0 && dz == 0 ? 2.0f : 1.0f;
+                sum += light * w;
+                weight += w;
+            }
+        }
+    if (weight <= 0.0f)
+        return 1.0f;
+    const float f = std::min(1.1f, std::max(0.3f, sum / weight));
+    return 1.0f + (f - 1.0f) * hal::gs::ground_light();
+}
+// The frame's view without the map: the death scene draws only the characters
+// over a red screen (World_Draw), and the native character draw needs a view.
+static void make_view(void* stage, float* view, float* proj);
+static int g_viewOnly = -1;             // the frame Native_WorldView made a view for
+extern "C" void Native_WorldView(void* stage) {
+    float view[16], proj[16];
+    make_view(stage, view, proj);
+    g_viewOnly = hal::gs::frame_count();
+}
+// Whether this frame has ground to lay the player's shadow on (the original
+// draws it into the map's ground cells again: no map, no shadow).
+bool hle_world_has_ground() { return g_viewOnly != hal::gs::frame_count(); }
+
+// The frame's view from the stage's eye / direction / up (or the editor's
+// camera, or WOTS2_VIEW): world → camera and the game's projection.
+static void make_view(void* stage, float* view, float* proj) {
     const float* cam = static_cast<const float*>(stage);
     float editorCam[12];
     if (Editor_Camera(editorCam, editorCam + 4, editorCam + 8))
@@ -354,7 +499,7 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
     const float xl = sqrtf(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
     for (float& c : x) c /= xl > 0 ? xl : 1;
     const float y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
-    const float view[16] = {x[0], y[0], z[0], 0,  x[1], y[1], z[1], 0,  x[2], y[2], z[2], 0,
+    const float v[16] = {x[0], y[0], z[0], 0,  x[1], y[1], z[1], 0,  x[2], y[2], z[2], 0,
                             -(eye[0] * x[0] + eye[1] * x[1] + eye[2] * x[2]),
                             -(eye[0] * y[0] + eye[1] * y[1] + eye[2] * y[2]),
                             -(eye[0] * z[0] + eye[1] * z[1] + eye[2] * z[2]), 1};
@@ -366,11 +511,30 @@ void MapState_Draw(void* self, const float*, void* stage, void*) {
     float zoom = *guest::ptr<float>(0x2EDD30u) > 0 ? *guest::ptr<float>(0x2EDD30u) : 1.0f;    // (Camera.SetFOV)
     if (Editor_Zoom() > 0.0f)
         zoom = Editor_Zoom();               // (photo mode's field of view)
-    const float proj[16] = {zoom * 512.0f / 320.0f, 0, 0, 0,  0, zoom * 512.0f * 0.94f / 224.0f, 0, 0,
+    const float p[16] = {zoom * 512.0f / 320.0f, 0, 0, 0,  0, zoom * 512.0f * 0.94f / 224.0f, 0, 0,
                             0, 0, (zf + zn) / (zn - zf), -1,  0, 0, 2 * zf * zn / (zn - zf), 0};
+    memcpy(view, v, sizeof v);
+    memcpy(proj, p, sizeof p);
     mul(view, proj, g_view.viewProj);
-    memcpy(g_view.view, view, sizeof view);
+    memcpy(g_view.view, view, sizeof v);
     g_view.frame = hal::gs::frame_count();
+}
+
+void MapState_Draw(void* self, const float*, void* stage, void*) {
+    settle(self);
+    NativeMap* m = g_maps[self];
+    if (!m)
+        return;
+    hal::gs::clear(m->clearColor);
+    // The map's fog (MapInfo+0xB0 = what the game hands GsDevice_SetFogParams),
+    // toward the clear colour.  WOTS2_NO_FOG=1 (debug) switches it off.
+    static const bool noFog = getenv("WOTS2_NO_FOG") != nullptr;
+    hal::gs::set_fog(!noFog && m->fog[3] > m->fog[2], m->fog[0], m->fog[1], m->fog[2], m->fog[3], m->clearColor);
+    // The view is the decompiled stage's: an eye, the way it looks, and up —
+    // unless the level editor is flying its own camera.
+    float view[16], proj[16];
+    make_view(stage, view, proj);
+    const float* eye = g_view.eye;
     {   // For the modern lighting (a mod's): the view, the sun, the point lights.
         const model::Lighting& sun = model::scene_light();
         static float lights[64 * 8];
@@ -665,7 +829,12 @@ bool hle_interior_entrance(float* stand, float* face) {
 }
 
 // ══ Stage, camera and the small world objects ═════════════════════════════
-void  Camera_Update(void*, GsDevice*) {}
+// 0x165CB0, while the player is dying: every light's direction and colour and
+// the ambient to nothing (the matrix at 0x2D1FD0 is zeros but its w), so the
+// characters are black shapes against the red the world is cleared to.  The
+// next map's light brings them back.
+extern "C" void hle_light_dark();
+void  Camera_Update(void*, GsDevice*) { hle_light_dark(); }
 void  Camera_Release(void*) {}
 void  GsDevice_ApplyView(GsDevice*) {}
 

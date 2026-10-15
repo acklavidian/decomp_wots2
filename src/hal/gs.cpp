@@ -245,6 +245,25 @@ float ripples(vec2 w) {
     }
     return min(sum, 1.2);
 }
+// The ground's texture pushed about a little (uBump.w = how far, in tenths of
+// a unit … roughly): rows of paving and planks no longer run dead straight to
+// the vanishing point.  The push is a smooth noise in the world, carried into
+// the texture's own space through the screen derivatives, so it is seamless
+// from one triangle to the next and the same on every texture whatever its
+// tiling.  Only on what faces up.
+vec2 ground_warp(vec2 uv) {
+    vec3 dx = dFdx(vWorld), dy = dFdy(vWorld);
+    mat2 A = mat2(dx.xz, dy.xz);
+    mat2 B = mat2(dFdx(uv), dFdy(uv));
+    vec3 n = cross(dx, dy);
+    float d = determinant(A);
+    if (abs(n.y) < 0.75 * length(n) || abs(d) < 1e-12)
+        return uv;
+    vec2 p = vWorld.xz;
+    vec2 w = vec2(noise2(p * 0.4), noise2(p * 0.4 + vec2(31.7, 12.3))) - 0.5
+           + 0.5 * (vec2(noise2(p * 1.1 + vec2(5.1, 7.9)), noise2(p * 1.1 + vec2(19.4, 3.3))) - 0.5);
+    return uv + B * inverse(A) * (w * 0.25 * uBump.w);
+}
 // Wet: darker, and on flat ground puddles that take the sky and the sun.
 vec3 wet_look(vec3 c, vec3 n, float sh, bool model) {
     float open = rain_open(vWorld, n);
@@ -280,7 +299,8 @@ float in_shadow(vec3 p, float bias) {
 }
 void main() {
     // (Before any discard: derivatives need every pixel of the quad.)
-    float bumped = uKind == 2 && uBump.x > 0.0 ? bump_light(vUv) : 1.0;
+    vec2 uv = uKind == 2 && uBump.w > 0.0 ? ground_warp(vUv) : vUv;
+    float bumped = uKind == 2 && uBump.x > 0.0 ? bump_light(uv) : 1.0;
     if (uKind == 3 && uBump.x > 0.0 && uBump.z > 0.0) {
         // Characters: much less on skin (faces, hands) — painted features
         // read as dents.  Skin by its colour (YCbCr's usual ranges).
@@ -293,7 +313,7 @@ void main() {
     }
     vec3 faceN = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
     if (dot(faceN, uEye - vWorld) < 0.0) faceN = -faceN;       // (the side that is seen)
-    vec4 t = texture(uTex, vUv);
+    vec4 t = texture(uTex, uv);
     vec4 c = t * vColor;
     if (c.a < uAlphaRef) discard;
     if (uCutout == 1) c.a = vColor.a;
@@ -382,7 +402,11 @@ void main() {
         c.a *= clamp((uFog.z - vDepth) / 4.0, 0.0, 1.0) > 0.0 ? 1.0 : 0.0;
     }
     oColor = c;
-    oDist = vec4(vDepth);
+    // (Alpha 1: blending applies to this buffer too, and the game's usual
+    // src-alpha blend then stores the distance as it is.  With the distance
+    // as alpha it stored vDepth² + what was there × (1 − vDepth): garbage, and
+    // the ambient occlusion found nothing to darken.)
+    oDist = vec4(vDepth, vDepth, vDepth, 1.0);
 }
 )";
 
@@ -672,34 +696,41 @@ float dist(vec2 uv) { return texture(uDistT, uv).r; }
 vec3 at(vec2 uv, float z) { return vec3((uv.x * 2.0 - 1.0) / uXScale * z / uProj.x, (uv.y * 2.0 - 1.0) * z / uProj.y, -z); }
 vec3 view(vec2 uv) { return at(uv, dist(uv)); }
 void main() {
-    if (dist(vUv) > 1e8) { o = vec4(1.0); return; }
-    vec3 P = view(vUv);
-    vec3 x1 = view(vUv + vec2(uTexel.x, 0.0)) - P, x2 = P - view(vUv - vec2(uTexel.x, 0.0));
-    vec3 y1 = view(vUv + vec2(0.0, uTexel.y)) - P, y2 = P - view(vUv - vec2(0.0, uTexel.y));
+    // (This pass is half the frame's size: a pixel's centre lies on the border
+    // of two of the distance buffer's, and nearest sampling flipped between
+    // them — rows and columns where the normal collapsed and a flat floor
+    // shaded itself in stripes.  Work from a whole texel's centre.)
+    vec2 c = (floor(vUv / uTexel) + 0.5) * uTexel;
+    if (dist(c) > 1e8) { o = vec4(1.0); return; }
+    vec3 P = view(c);
+    vec3 x1 = view(c + vec2(uTexel.x, 0.0)) - P, x2 = P - view(c - vec2(uTexel.x, 0.0));
+    vec3 y1 = view(c + vec2(0.0, uTexel.y)) - P, y2 = P - view(c - vec2(0.0, uTexel.y));
     vec3 N = normalize(cross(abs(x1.z) < abs(x2.z) ? x1 : x2, abs(y1.z) < abs(y2.z) ? y1 : y2));
     if (dot(N, P) > 0.0) N = -N;
     float r = uAo.x, z = -P.z;
     float px = min(r * uProj.y / z * 0.5 * uAo.z, uAo.z * 0.1);
     if (px < 1.5) { o = vec4(1.0); return; }
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-    const int n = 12;
+    // Alchemy AO (McGuire et al. 2011): each sample counts by how far it rises
+    // above the surface's plane, over its distance squared, fading out at the
+    // radius; a bias by distance keeps a flat floor from shading itself.
+    const int n = 16;
     float sum = 0.0;
     for (int i = 0; i < n; i++) {
         float a = (float(i) + 0.5) / float(n);
         float angle = a * 6.2831853 * 7.0 + noise * 6.2831853;
-        vec2 uv = vUv + vec2(cos(angle), sin(angle)) * (a * px) * uTexel;
+        vec2 uv = (floor((c + vec2(cos(angle), sin(angle)) * (a * px) * uTexel) / uTexel) + 0.5) * uTexel;
         float dq = dist(uv);
         if (dq > 1e8) continue;
         vec3 v = at(uv, dq) - P;
-        float vv = dot(v, v), vn = dot(v, N);
-        float f = max(r * r - vv, 0.0);
-        // (What lies nearly in the surface does not count.)
-        sum += f * f * f * max((vn - 0.01 * z - 0.15 * sqrt(vv)) / (vv + 0.01), 0.0);
+        float vv = dot(v, v);
+        if (vv > r * r) continue;
+        float fall = 1.0 - vv / (r * r);
+        sum += max(dot(v, N) - 0.004 * z, 0.0) / (vv + 0.002 * r * r) * fall;
     }
-    // (Never all the way to black: the PS2's pictures are lit softly, and a
-    // corner that went black would look like a hole.)
-    float ao = max(0.0, 1.0 - sum * 5.0 / (pow(r, 6.0) * float(n)));
-    o = vec4(mix(1.0, max(ao, 0.35), clamp(uAo.y, 0.0, 1.0) * 0.75));
+    // Strength scales the darkening (0 none, 1 as meant, 2 twice as much).
+    float dark = clamp(sum * 2.0 * r / float(n), 0.0, 1.0) * 0.8;
+    o = vec4(max(1.0 - dark * max(uAo.y, 0.0), 0.15));
 }
 )";
 static const char* kBrightFs = R"(#version 330 core
@@ -772,6 +803,7 @@ uniform vec2 uAoTexel;
 uniform vec4 uOn;           // ao, bloom strength, grade, the frame's width / height
 uniform vec4 uGrade;        // contrast, saturation, warmth, vignette
 uniform float uBright;      // the mood's brightness
+uniform float uAoView;      // (debug, WOTS2_AO_VIEW: the occlusion alone)
 uniform vec4 uDof;          // strength (0 off), focus distance (0: the middle's), the frame's height
 uniform sampler2D uRays;
 uniform vec3 uRaysOn;       // the sun's colour × strength (0: none)
@@ -802,6 +834,7 @@ void main() {
     vec4 frame = texture(uColor, vUv);
     vec3 c = frame.rgb;
     float z = texture(uDistT, vUv).r;
+    if (uAoView > 1.5) { o = vec4(z > 1e8 ? vec3(1.0, 0.0, 1.0) : vec3(fract(z / 10.0)), 1.0); return; }
     if (uDof.x > 0.0)
         c = dof(c, min(z, 1e4));
     if (uOn.x > 0.5 && z < 1e8) {
@@ -815,7 +848,9 @@ void main() {
                 sum += texture(uAoT, uv).r * w;
                 weight += w;
             }
-        c *= weight > 0.001 ? sum / weight : texture(uAoT, vUv).r;
+        float ao = weight > 0.001 ? sum / weight : texture(uAoT, vUv).r;
+        c *= ao;
+        if (uAoView > 0.5) { o = vec4(vec3(ao), 1.0); return; }
     }
     c *= uBright;
     c += texture(uBloom, vUv).rgb * uOn.y;
@@ -1295,7 +1330,7 @@ static void lighting_begin(const Frame& f, const Frame* before, float t) {
                 s_light.modelShadow);
     glUniformMatrix4fv(s_uShadowMat, 1, GL_FALSE, m);
     glUniform4f(s_uSunDir, f.world.sun[0], f.world.sun[1], f.world.sun[2], sun > 1.0f ? 1.0f : sun < 0.0f ? 0.0f : sun);
-    glUniform4f(s_uBump, s_light.bump, s_light.bumpDepth, s_light.characterBump, 0.0f);
+    glUniform4f(s_uBump, s_light.bump, s_light.bumpDepth, s_light.characterBump, s_light.groundWarp);
     {
         // Only by day and out of doors: a night map's painted light holds its
         // lanterns' pools (relit, the night went flat and bright — its light
@@ -1879,6 +1914,8 @@ static void post_pass(const Frame& f) {
     glUniform4f(glGetUniformLocation(s_pComp, "uGrade"), s_light.contrast, s_light.saturation, s_light.warmth,
                 s_light.vignette);
     glUniform1f(glGetUniformLocation(s_pComp, "uBright"), s_base.moods && s_moodSet ? s_moodNow.brightness : 1.0f);
+    static const bool aoView = getenv("WOTS2_AO_VIEW") != nullptr;
+    glUniform1f(glGetUniformLocation(s_pComp, "uAoView"), aoView ? (float)atoi(getenv("WOTS2_AO_VIEW")) : 0.0f);
     glUniform4f(glGetUniformLocation(s_pComp, "uDof"), s_writeDist ? s_light.dof : 0.0f, s_light.dofFocus, (float)H, 0.0f);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE1);
@@ -3131,6 +3168,7 @@ float rain_now() { return s_rain; }
 float wet_now() { return s_wet; }
 bool real_shadows() { return !s_lightingHeld && s_light.shadows && s_light.shadowStrength > 0.0f && s_cur.world.set; }
 bool lighting_held() { return s_lightingHeld; }
+float ground_light() { return s_lightingHeld ? 0.0f : s_base.groundLight; }
 bool toggle_lighting() {
     s_lightingHeld = !s_lightingHeld;
     return !s_lightingHeld;

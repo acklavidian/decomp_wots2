@@ -45,10 +45,11 @@ A mod loader ships with four mods switched on:
   - **Bump mapping** on stone, wood, tiles and clothes, and an optional **un-baked** mode that relights the whole town from its sun instead of its painted-in light.
   - **Wind and dust** — the game's own gusts made visible: motes in the air, dust swept down the street (none in the rain).
   - **Moods** — a look of its own for dawn, evening, night, indoors and the rain, blended in as they come.
+  - **Characters in shade** — people take the light painted into the ground under their feet, so they darken in a shaded corner or away from a lantern as the town around them does.
 
 ![Without and with modern lighting: the first fight, and Amakaze by night](docs/lighting_native.png)
 
-Each is a folder with an `.ini` you can edit — or press **F5** in the game and move the sliders while you play; **Save** keeps them. Writing your own takes one header:
+Each is a folder with an `.ini` you can edit — or, with a controller, open **Settings → R1 "Enhancements"** in the game's own menu (picture shape, resolution, frame rate, HD textures, lighting, shadows, weather, dust, bloom, moods; saved when you leave it), or press **F5** for every slider; **Save** keeps them. Writing your own takes one header:
 replace any game file by dropping it in a folder, or load code that reads and
 writes the game's memory every frame. The guide is [`mods/README.md`](mods/README.md).
 **HD texture packs made for PCSX2 work as they are:** put the pack's `.dds` files in a

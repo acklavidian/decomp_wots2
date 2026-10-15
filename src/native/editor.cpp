@@ -1118,6 +1118,54 @@ void set_fps(int fps) { hal::gs::set_rate(fps, hal::gs::video().vsync); }
 
 std::string sFpsSaved;
 
+// The FPS unlock's rate and vsync into its mod.ini → what to say.
+std::string save_fps_ini() {
+    const std::string dir = mods::dir_of("fps_unlock");
+    if (dir.empty())
+        return "The FPS unlock mod is not loaded";
+    const hal::gs::Video v = hal::gs::video();
+    if (v.fps != 0)
+        sFpsWhenOn = v.fps;
+    const std::string path = dir + "/mod.ini";
+    char rateText[16];
+    if (sFpsWhenOn < 0) snprintf(rateText, sizeof rateText, "display");
+    else snprintf(rateText, sizeof rateText, "%d", sFpsWhenOn);
+    const bool ok = save_settings(path, {{"fps", rateText}, {"vsync", v.vsync ? "1" : "0"}}) &&
+                    save_settings(path, {{"enabled", v.fps != 0 ? "1" : "0"}}, "mod");
+    const std::string said = ok ? "Saved to " + path : "Could not write " + path;
+    printf("[fps] %s\n", said.c_str());
+    return said;
+}
+
+// The picture's shape and lines into the widescreen and resolution mods' mod.ini.
+std::string save_video_ini() {
+    const hal::gs::Video v = hal::gs::video();
+    std::string said;
+    const std::string wide = mods::dir_of("widescreen");
+    if (!wide.empty()) {
+        char aspect[16];
+        if (v.aspect < 0.0f) snprintf(aspect, sizeof aspect, "auto");
+        else if (fabsf(v.aspect - 16.0f / 9.0f) < 0.01f) snprintf(aspect, sizeof aspect, "16:9");
+        else if (fabsf(v.aspect - 21.0f / 9.0f) < 0.01f) snprintf(aspect, sizeof aspect, "21:9");
+        else snprintf(aspect, sizeof aspect, "%.4f", v.aspect);
+        const std::string path = wide + "/mod.ini";
+        const bool ok = (v.aspect == 0.0f || save_settings(path, {{"aspect", aspect}})) &&
+                        save_settings(path, {{"enabled", v.aspect != 0.0f ? "1" : "0"}}, "mod");
+        said += ok ? "Saved to " + path : "Could not write " + path;
+    }
+    const std::string res = mods::dir_of("resolution");
+    if (!res.empty()) {
+        char lines[16];
+        if (v.height <= 0) snprintf(lines, sizeof lines, "window");
+        else snprintf(lines, sizeof lines, "%d", v.height);
+        const std::string path = res + "/mod.ini";
+        said += std::string(said.empty() ? "" : "; ") +
+                (save_settings(path, {{"internal", lines}}) ? "Saved to " + path : "Could not write " + path);
+    }
+    printf("[video] %s\n", said.c_str());
+    return said;
+}
+
 void fps_section() {
     if (!ImGui::CollapsingHeader("FPS unlock", ImGuiTreeNodeFlags_DefaultOpen))
         return;
@@ -1139,22 +1187,65 @@ void fps_section() {
         hal::gs::set_rate(hal::gs::video().fps, vsync);
     ImGui::TextDisabled("The game still runs at 30; the pictures in between are made up.");
     const std::string dir = mods::dir_of("fps_unlock");
-    if (!dir.empty() && ImGui::Button("Save##fps")) {
-        const std::string path = dir + "/mod.ini";
-        char rateText[16];
-        if (sFpsWhenOn < 0) snprintf(rateText, sizeof rateText, "display");
-        else snprintf(rateText, sizeof rateText, "%d", sFpsWhenOn);
-        const bool ok = save_settings(path, {{"fps", rateText}, {"vsync", hal::gs::video().vsync ? "1" : "0"}}) &&
-                        save_settings(path, {{"enabled", hal::gs::video().fps != 0 ? "1" : "0"}}, "mod");
-        sFpsSaved = ok ? "Saved to " + path : "Could not write " + path;
-        printf("[fps] %s\n", sFpsSaved.c_str());
-    }
+    if (!dir.empty() && ImGui::Button("Save##fps"))
+        sFpsSaved = save_fps_ini();
     if (!dir.empty()) {
         ImGui::SameLine();
         ImGui::TextDisabled("into the FPS unlock mod's mod.ini");
     }
     if (!sFpsSaved.empty())
         ImGui::TextWrapped("%s", sFpsSaved.c_str());
+}
+
+// The lighting's settings into the lighting mod's mod.ini → what to say.
+std::string save_lighting_ini(const hal::gs::Lighting& l) {
+    const std::string dir = mods::dir_of("lighting");
+    if (dir.empty())
+        return "The lighting mod is not loaded";
+    const std::vector<std::pair<std::string, std::string>> values = {
+        {"shadows", l.shadows ? "1" : "0"},
+        {"map_shadows", l.mapShadows ? "1" : "0"},
+        {"shadow_strength", num(l.shadowStrength)},
+        {"character_shadow", num(l.modelShadow)},
+        {"character_ground_light", num(l.groundLight)},
+        {"shadow_quality", kQuality[quality_of(l.shadowSize)]},
+        {"bump", num(l.bump)},
+        {"bump_depth", num(l.bumpDepth)},
+        {"ground_warp", num(l.groundWarp)},
+        {"dust", num(l.dust)},
+        {"character_bump", num(l.characterBump)},
+        {"god_rays", num(l.godRays)},
+        {"weather", l.weather == 2 ? "rain" : l.weather == 1 ? "clear" : "auto"},
+        {"rain_chance", num(l.rainChance)},
+        {"rain_amount", num(l.rainAmount)},
+        {"unbake", num(l.unbake)},
+        {"unbake_exposure", num(l.unbakeExposure)},
+        {"ao", l.ao ? "1" : "0"},
+        {"ao_strength", num(l.aoStrength)},
+        {"ao_radius", num(l.aoRadius)},
+        {"lanterns", l.lanterns ? "1" : "0"},
+        {"lantern_shadows", l.lanternShadows ? "1" : "0"},
+        {"lantern_strength", num(l.lanternStrength)},
+        {"bloom", num(l.bloom)},
+        {"bloom_threshold", num(l.bloomThreshold)},
+        {"grade", l.grade ? "1" : "0"},
+        {"contrast", num(l.contrast)},
+        {"saturation", num(l.saturation)},
+        {"warmth", num(l.warmth)},
+        {"vignette", num(l.vignette)},
+    };
+    std::vector<std::pair<std::string, std::string>> all = values;
+    all.push_back({"moods", l.moods ? "1" : "0"});
+    static const char* const kName[5] = {"dawn", "evening", "night", "indoors", "rain"};
+    static const char* const kKey[10] = {"brightness", "contrast", "saturation", "warmth", "vignette",
+                                         "bloom", "ao", "shadow", "god_rays", "dust"};
+    for (int m = 0; m < 5; m++)
+        for (int k = 0; k < 10; k++)
+            all.push_back({std::string(kName[m]) + "." + kKey[k], num((&l.mood[m].brightness)[k])});
+    const std::string path = dir + "/mod.ini";
+    const std::string said = save_settings(path, all) ? "Saved to " + path : "Could not write " + path;
+    printf("[lighting] %s\n", said.c_str());
+    return said;
 }
 
 // The texture pack (F9, and the panel): its pictures or the disc's own.
@@ -1171,6 +1262,17 @@ void toggle_texture_pack() {
     printf("[textures] %s\n", sToast.c_str());
 }
 
+std::string save_pack_ini() {
+    const std::string dir = mods::texture_pack_dir();
+    if (dir.empty())
+        return "";
+    const std::string path = dir + "/mod.ini";
+    const bool ok = save_settings(path, {{"on", texture_pack::enabled() ? "1" : "0"}});
+    const std::string said = ok ? "Saved to " + path : "Could not write " + path;
+    printf("[textures] %s\n", said.c_str());
+    return said;
+}
+
 void texture_section() {
     if (!texture_pack::active() || !ImGui::CollapsingHeader("Texture pack", ImGuiTreeNodeFlags_DefaultOpen))
         return;
@@ -1178,12 +1280,8 @@ void texture_section() {
     if (ImGui::Checkbox("HD textures on (F9)", &on))
         texture_pack::set_enabled(on);
     const std::string dir = mods::texture_pack_dir();
-    if (!dir.empty() && ImGui::Button("Save##textures")) {
-        const std::string path = dir + "/mod.ini";
-        const bool ok = save_settings(path, {{"on", texture_pack::enabled() ? "1" : "0"}});
-        sPackSaved = ok ? "Saved to " + path : "Could not write " + path;
-        printf("[textures] %s\n", sPackSaved.c_str());
-    }
+    if (!dir.empty() && ImGui::Button("Save##textures"))
+        sPackSaved = save_pack_ini();
     if (!dir.empty()) {
         ImGui::SameLine();
         ImGui::TextDisabled("whether a run starts with them");
@@ -1214,6 +1312,7 @@ void lighting_panel() {
         ImGui::Checkbox("The map casts them too (carts, eaves, trees)", &l.mapShadows);
         ImGui::SliderFloat("Strength##shadow", &l.shadowStrength, 0.0f, 1.0f);
         ImGui::SliderFloat("On characters", &l.modelShadow, 0.0f, 1.0f);
+        ImGui::SliderFloat("Characters take the ground's light", &l.groundLight, 0.0f, 1.0f);
         int q = quality_of(l.shadowSize);
         if (ImGui::Combo("Quality", &q, kQuality, 3))
             l.shadowSize = kQualitySize[q];
@@ -1222,6 +1321,7 @@ void lighting_panel() {
         ImGui::SliderFloat("Strength##bump", &l.bump, 0.0f, 3.0f, l.bump > 0.0f ? "%.2f" : "off");
         ImGui::SliderFloat("Depth", &l.bumpDepth, 0.5f, 12.0f);
         ImGui::SliderFloat("On characters##bump", &l.characterBump, 0.0f, 1.0f);
+        ImGui::SliderFloat("Ground warp (breaks up straight rows)", &l.groundWarp, 0.0f, 3.0f, l.groundWarp > 0.0f ? "%.2f" : "off");
     }
     if (ImGui::CollapsingHeader("Un-bake the map's light", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Relit", &l.unbake, 0.0f, 1.0f, l.unbake > 0.0f ? "%.2f" : "baked");
@@ -1278,6 +1378,34 @@ void lighting_panel() {
         ImGui::SliderFloat("Warmth", &l.warmth, -1.0f, 1.0f);
         ImGui::SliderFloat("Vignette", &l.vignette, 0.0f, 1.0f);
     }
+    // The main settings are the day's; the moods take over at other times.
+    // Moving a main slider carries the moods with it — scaled by the same
+    // ratio (strengths) or shifted by the same amount (the grade) — so that
+    // it shows whatever the time of day, and each mood keeps its own look.
+    {
+        struct { float hal::gs::Lighting::*main; float hal::gs::Mood::*mood; bool scale; } const kLinked[] = {
+            {&hal::gs::Lighting::aoStrength, &hal::gs::Mood::ao, true},
+            {&hal::gs::Lighting::shadowStrength, &hal::gs::Mood::shadow, true},
+            {&hal::gs::Lighting::bloom, &hal::gs::Mood::bloom, true},
+            {&hal::gs::Lighting::dust, &hal::gs::Mood::dust, true},
+            {&hal::gs::Lighting::godRays, &hal::gs::Mood::godRays, true},
+            {&hal::gs::Lighting::contrast, &hal::gs::Mood::contrast, false},
+            {&hal::gs::Lighting::saturation, &hal::gs::Mood::saturation, false},
+            {&hal::gs::Lighting::warmth, &hal::gs::Mood::warmth, false},
+            {&hal::gs::Lighting::vignette, &hal::gs::Mood::vignette, false},
+        };
+        for (const auto& k : kLinked) {
+            const float was = before.*k.main, now = l.*k.main;
+            if (was == now)
+                continue;
+            for (hal::gs::Mood& m : l.mood) {
+                if (!k.scale)
+                    m.*k.mood += now - was;
+                else
+                    m.*k.mood = was > 0.001f ? m.*k.mood * now / was : now;
+            }
+        }
+    }
     if (memcmp(&l, &before, sizeof l) != 0)
         hal::gs::set_lighting(l);
 
@@ -1286,49 +1414,8 @@ void lighting_panel() {
     if (dir.empty()) {
         ImGui::TextWrapped("The lighting mod is not loaded, so there is nowhere to save to.");
     } else {
-        if (ImGui::Button("Save")) {
-            const std::vector<std::pair<std::string, std::string>> values = {
-                {"shadows", l.shadows ? "1" : "0"},
-                {"map_shadows", l.mapShadows ? "1" : "0"},
-                {"shadow_strength", num(l.shadowStrength)},
-                {"character_shadow", num(l.modelShadow)},
-                {"shadow_quality", kQuality[quality_of(l.shadowSize)]},
-                {"bump", num(l.bump)},
-                {"bump_depth", num(l.bumpDepth)},
-                {"dust", num(l.dust)},
-                {"character_bump", num(l.characterBump)},
-                {"god_rays", num(l.godRays)},
-                {"weather", l.weather == 2 ? "rain" : l.weather == 1 ? "clear" : "auto"},
-                {"rain_chance", num(l.rainChance)},
-                {"rain_amount", num(l.rainAmount)},
-                {"unbake", num(l.unbake)},
-                {"unbake_exposure", num(l.unbakeExposure)},
-                {"ao", l.ao ? "1" : "0"},
-                {"ao_strength", num(l.aoStrength)},
-                {"ao_radius", num(l.aoRadius)},
-                {"lanterns", l.lanterns ? "1" : "0"},
-                {"lantern_shadows", l.lanternShadows ? "1" : "0"},
-                {"lantern_strength", num(l.lanternStrength)},
-                {"bloom", num(l.bloom)},
-                {"bloom_threshold", num(l.bloomThreshold)},
-                {"grade", l.grade ? "1" : "0"},
-                {"contrast", num(l.contrast)},
-                {"saturation", num(l.saturation)},
-                {"warmth", num(l.warmth)},
-                {"vignette", num(l.vignette)},
-            };
-            std::vector<std::pair<std::string, std::string>> all = values;
-            all.push_back({"moods", l.moods ? "1" : "0"});
-            static const char* const kName[5] = {"dawn", "evening", "night", "indoors", "rain"};
-            static const char* const kKey[10] = {"brightness", "contrast", "saturation", "warmth", "vignette",
-                                                 "bloom", "ao", "shadow", "god_rays", "dust"};
-            for (int m = 0; m < 5; m++)
-                for (int k = 0; k < 10; k++)
-                    all.push_back({std::string(kName[m]) + "." + kKey[k], num((&l.mood[m].brightness)[k])});
-            const std::string path = dir + "/mod.ini";
-            sLightSaved = save_settings(path, all) ? "Saved to " + path : "Could not write " + path;
-            printf("[lighting] %s\n", sLightSaved.c_str());
-        }
+        if (ImGui::Button("Save"))
+            sLightSaved = save_lighting_ini(l);
         ImGui::SameLine();
         ImGui::TextDisabled("into the lighting mod's mod.ini");
         if (!sLightSaved.empty())
@@ -1542,6 +1629,15 @@ void close_editor() {
 }  // namespace
 
 namespace editor {
+
+// Everything the in-game "Enhancements" page changes, into the mods' mod.ini.
+void save_graphics() {
+    save_video_ini();
+    save_fps_ini();
+    save_pack_ini();
+    if (mods::dir_of("lighting")[0] != '\0')
+        save_lighting_ini(hal::gs::lighting());
+}
 
 bool event(const SDL_Event& ev) {
     if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F2) {

@@ -433,6 +433,20 @@ static void current_view(float* mvp) {
 // Who is being drawn (for the pictures in between: see begin_3d's `who`).
 // The sword parts drawn after a character's body are taken as its own.
 static u32 g_drawing = 0;
+// The ground's painted light under each character (hle_gameplay.cpp), eased.
+extern "C" float hle_ground_light_at(const float* p);
+static std::map<u32, float> g_ground;
+static float ground_eased(u32 who, const float* feet) {
+    const float want = hle_ground_light_at(feet);
+    auto it = g_ground.find(who);
+    if (it == g_ground.end() || !hal::gs::ground_light())
+        return g_ground[who] = want;
+    return it->second += (want - it->second) * 0.25f;
+}
+static float ground_of(u32 who) {
+    auto it = g_ground.find(who);
+    return it != g_ground.end() ? it->second : 1.0f;
+}
 static u32 who_of(u32 a, u32 b) { return (a * 0x9E3779B1u) ^ (b + 0x7F4A7C15u + (a << 6) + (a >> 2)) | 1u; }
 
 void CharaModels_Draw(Chara* c, int) {
@@ -500,8 +514,15 @@ void CharaModels_Draw(Chara* c, int) {
     // Lit by the map's lights, dimmed by the light of the cell it stands on
     // (Chara's light, 127 = full; it eases from cell to cell).
     model::Lighting light = model::scene_light();
+    // (Modern lighting: …and by the light painted into the ground under it,
+    // eased so that stepping into a shaded doorway darkens it gradually.)
+    const float ground = ground_eased(guest::addr(c), &matrix[12]);
+    static const int traceGround = getenv("WOTS2_TRACE_GROUND") ? atoi(getenv("WOTS2_TRACE_GROUND")) : 0;
+    if (traceGround > 0 && c->id == 0 && hal::gs::frame_count() % traceGround == 0)     // (debug)
+        printf("[ground] frame %d: at %.2f %.2f %.2f ground light %.2f\n", hal::gs::frame_count(), matrix[12],
+               matrix[13], matrix[14], ground);
     for (int k = 0; k < 3; k++)
-        light.tint[k] = c->light[k] / 127.0f;
+        light.tint[k] = c->light[k] / 127.0f * ground;
     {   // …and by the point lights near it (point_lights.cpp).
         float dirs[3][4] = {}, colours[3][4] = {};
         const int changed = Lights_At(&matrix[12], dirs, colours);
@@ -525,10 +546,11 @@ void CharaModels_Draw(Chara* c, int) {
 // ground near the player drawn again with that texture laid over it
 // (0x135A40 → 0x149580), `strength` × 64 / 128 dark.  Here the same
 // silhouette is laid on the level ground under the player.
+extern bool hle_world_has_ground();     // hle_gameplay.cpp
 void hle_chara_shadow(Chara* c, float strength) {
     auto it = g_native.find(guest::addr(c));
     if (it == g_native.end() || !it->second.models || !it->second.models->loaded || getenv("WOTS2_NO_SHADOW") ||
-        hal::gs::real_shadows())
+        hal::gs::real_shadows() || !hle_world_has_ground())
         return;
     ModelSet* set = it->second.models;
     const CharaParams* p = params_of(c);
@@ -706,7 +728,10 @@ int draw_sword_part(const s16* swordModel, int idsAt, int slot, const float* mat
         memcpy(pose, matrix, sizeof pose);
     current_view(mvp);
     hal::gs::begin_3d(mvp, hal::gs::View::Model, who_of(g_drawing, (u32)idsAt << 8 | (u32)slot));
-    part->draw(pose, sword_texture(db, texture), &model::scene_light());
+    model::Lighting light = model::scene_light();
+    const float ground = ground_of(g_drawing);          // (its character's)
+    for (float& t : light.tint) t *= ground;
+    part->draw(pose, sword_texture(db, texture), &light);
     hal::gs::end_3d();
     return 1;
 }
@@ -772,6 +797,10 @@ static void object_draw(const char* path, const float* matrix, const char* textu
         shared = &found->second;
     }
     model::Lighting light = model::scene_light();
+    if (!g_objectGlow) {
+        const float ground = hle_ground_light_at(&matrix[12]);
+        for (float& t : light.tint) t *= ground;
+    }
     if (g_objectLit) {
         for (int k = 0; k < 3; k++)
             light.ambient[k] = g_objectGlow ? g_objectLevel[k] : light.ambient[k] * g_objectLevel[k];

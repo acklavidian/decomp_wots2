@@ -170,6 +170,8 @@ void api_set_lighting(const Wots2Lighting* in) {
     l.dust = hal::gs::lighting().dust;
     l.unbake = hal::gs::lighting().unbake;
     l.modelShadow = hal::gs::lighting().modelShadow;
+    l.groundLight = hal::gs::lighting().groundLight;
+    l.groundWarp = hal::gs::lighting().groundWarp;
     l.lanternShadows = hal::gs::lighting().lanternShadows;
     l.weather = hal::gs::lighting().weather;
     l.rainChance = hal::gs::lighting().rainChance;
@@ -219,6 +221,16 @@ void api_set_weather(int mode, float chance, float amount) {
 void api_set_lantern_shadows(int on) {
     hal::gs::Lighting l = hal::gs::lighting();
     l.lanternShadows = on != 0;
+    hal::gs::set_lighting(l);
+}
+void api_set_ground_warp(float amount) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.groundWarp = amount < 0.0f ? 0.0f : amount > 3.0f ? 3.0f : amount;
+    hal::gs::set_lighting(l);
+}
+void api_set_ground_light(float share) {
+    hal::gs::Lighting l = hal::gs::lighting();
+    l.groundLight = share < 0.0f ? 0.0f : share > 1.0f ? 1.0f : share;
     hal::gs::set_lighting(l);
 }
 void api_set_model_shadow(float share) {
@@ -282,7 +294,8 @@ void load_mod(const std::string& root, const std::string& id) {
                 api_guest_ptr, api_hook, api_find, api_on_frame, api_pad_buttons, api_get_lighting, api_set_lighting,
                 api_set_map_shadows, api_set_bump, api_set_dust, api_set_unbake, api_set_model_shadow,
                 api_set_lantern_shadows, api_set_weather,
-                api_set_character_bump, api_set_god_rays, api_set_moods, api_set_mood};
+                api_set_character_bump, api_set_god_rays, api_set_moods, api_set_mood,
+                api_set_ground_light, api_set_ground_warp};
 
     int parts = 0;
     if (is_dir(dir + "/files")) {

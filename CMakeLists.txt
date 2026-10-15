@@ -147,6 +147,7 @@ add_library(native STATIC
     src/native/mcard_native.cpp
     src/native/mods.cpp
     src/native/editor.cpp
+    src/native/enhancements.cpp
 )
 target_include_directories(native PUBLIC include)
 target_link_libraries(native PRIVATE hal)

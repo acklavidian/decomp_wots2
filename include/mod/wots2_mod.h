@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define WOTS2_MOD_API_VERSION 9      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust; 4: set_unbake; 5: set_model_shadow; 6: set_lantern_shadows; 7: set_weather; 8: set_character_bump, set_god_rays; 9: set_moods, set_mood */
+#define WOTS2_MOD_API_VERSION 11      /* 2: get_lighting / set_lighting; 3: set_map_shadows, set_bump, set_dust; 4: set_unbake; 5: set_model_shadow; 6: set_lantern_shadows; 7: set_weather; 8: set_character_bump, set_god_rays; 9: set_moods, set_mood; 10: set_ground_light; 11: set_ground_warp */
 
 /* What of the picture a mod may change (see include/hal/gs.h, Video). */
 typedef struct Wots2Video {
@@ -129,6 +129,12 @@ struct Wots2Api {
      * occlusion, shadow strength, god rays, dust. */
     void (*set_moods)(int on);
     void (*set_mood)(int which, const float values[10]);
+    /* Version 10: characters and things take the light painted into the map
+     * on the ground under them (darker in a shaded corner): 0 = off, 1 = fully. */
+    void (*set_ground_light)(float share);
+    /* Version 11: the ground's texture pushed about a little, so that rows of
+     * paving and planks do not run dead straight into the distance: 0 = off. */
+    void (*set_ground_warp)(float amount);
 };
 
 /* Exported by the mod.  0 = loaded; anything else: the mod is left out. */

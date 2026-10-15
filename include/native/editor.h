@@ -7,5 +7,8 @@ namespace editor {
 
 // Every window event goes here first; true = the editor took it.
 bool event(const SDL_Event& ev);
+// Writes the graphics settings (picture, FPS, texture pack, lighting) into
+// the mods' mod.ini files, as the F5 panel's Save buttons do.
+void save_graphics();
 
 }  // namespace editor

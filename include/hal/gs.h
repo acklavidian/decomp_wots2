@@ -151,6 +151,8 @@ struct Lighting {
     bool  shadows = false;
     bool  mapShadows = false;       // the map's own geometry casts them too (its lighting is baked)
     float modelShadow = 0.6f;       // how dark the sun's shadow falls on characters and things, against the map's
+    float groundWarp = 0.0f;        // the ground's texture pushed about, to break up straight rows: 0 = off
+    float groundLight = 0.0f;       // characters and things take the map's painted light under them: 0 = off, 1 = fully
     float bump = 0.0f;              // bump mapping of the map's surfaces, heights from brightness: 0 = off
     float bumpDepth = 4.0f;         // how steep a step of brightness is
     float dust = 0.0f;
@@ -183,6 +185,8 @@ Lighting lighting();
 // F3: hold the lighting back (or let it be again) without forgetting it → on now.
 bool     toggle_lighting();
 bool     lighting_held();       // F3 has it held back
+// groundLight as it applies now (0 while F3 holds the lighting back).
+float    ground_light();
 // The world's view this frame (MapState_Draw): its world→camera and
 // camera→clip matrices (row-vector convention), the direction towards the
 // sun and its colour, and the point lights: n × {x, y, z, radius, r, g, b, 0}.

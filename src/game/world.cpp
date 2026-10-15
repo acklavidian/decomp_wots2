@@ -499,6 +499,7 @@ void World_PlacePlayer(World* self, int exit) {
 }
 
 extern "C" void Native_WorldPost();
+extern "C" void Native_WorldView(void* stage);
 extern "C" int Native_PhotoHideHud();      // native/editor.cpp: photo mode without the HUD
 
 // ── 0x1DD530 ──────────────────────────────────────────────────────────────
@@ -510,6 +511,7 @@ int World_Draw(World* self) {
     void* charas = Charas(self);
     if (self->dying != 0) {
         GsDevice_ClearScreenColor(*gGsDevice, 0x80050C62u);
+        Native_WorldView(P(self->stage));      // (native: the character draw needs the frame's view)
         CharaMgr_Draw(charas, 0);
         RenderMgr_Draw(*gRenderMgr);
         Hud_Draw(*gHud);

@@ -88,6 +88,10 @@ int wots2_mod_init(const Wots2Api* api) {
     }
     if (api->version >= 6 && api->set_lantern_shadows)
         api->set_lantern_shadows(flag("lantern_shadows", 1));
+    if (api->version >= 11 && api->set_ground_warp)
+        api->set_ground_warp(number("ground_warp", 0.35f));
+    if (api->version >= 10 && api->set_ground_light)
+        api->set_ground_light(number("character_ground_light", 1.0f));
     if (api->version >= 5 && api->set_model_shadow)
         api->set_model_shadow(number("character_shadow", 0.6f));
     if (api->version >= 4 && api->set_unbake)

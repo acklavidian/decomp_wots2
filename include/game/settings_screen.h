@@ -28,7 +28,8 @@ enum SettingsPhase : s32 {
     kSettingsReady       = 4,
 };
 
-enum SettingsSub : s32 { kSubNone = 0, kSubScreenPos = 1, kSubColorBars = 2 };
+enum SettingsSub : s32 { kSubNone = 0, kSubScreenPos = 1, kSubColorBars = 2,
+                         kSubEnhancements = 3 };     // (native: the port's own page)
 
 struct SettingsScreen {
     MenuContext    context;     // +0x000  sprite set (asset 0x56), parameter file (0x57), &values

@@ -320,6 +320,10 @@ extern "C" void hle_light_set_colour(float r, float g, float b) {
     model::g_sceneLight.colour[0][2] = b;
 }
 extern "C" void hle_light_restore() { model::g_sceneLight = model::g_mapLight; }
+extern "C" void hle_light_dark() {
+    model::g_sceneLight = model::Lighting{};
+    for (float& a : model::g_sceneLight.ambient) a = 0.0f;
+}
 
 namespace model {
 
