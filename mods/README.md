@@ -19,7 +19,7 @@ Switch a mod off with `enabled = 0` in its `mod.ini`; change what it does under
 | `widescreen` | The 3D view opened out to the sides — the same height of view, more to the left and right. | `aspect` = `auto` (the window's shape), `16:9`, `21:9`, a number; `hud` = `edges` (gauges, enemy plates and the HUD's text keep to the picture's edges) or `center` |
 | `resolution` | Draws the picture with more lines than the PS2's 448. | `internal` = `window` (as many as the window has), a number of lines (`1080`), or `2x`, `3x`…; `window` = `1920x1080`; `fullscreen` = `1` |
 | `fps_unlock` | Shows more than thirty pictures a second. | `fps` = `display` or a number (`60`, `120`…); `vsync` = `1` / `0` |
-| `lighting` | Modern lighting in the world: the sun's shadows of characters, swords and things (in place of the dark blots under their feet), ambient occlusion, the lanterns of the night maps lighting the ground, bloom, a colour grade. | `shadows`, `map_shadows` (the map's own carts, eaves and trees cast too), `character_shadow` (how dark the sun's shadow falls on characters, 0.6; 1 = like the map), `character_ground_light` (characters and things take the light painted into the ground under them — darker in a shaded corner; 0 off … 1, the default), `ground_warp` (the ground's texture pushed about a little so that rows of paving and planks do not run dead straight into the distance; 0 off, 0.35 subtle, up to 3), `ao`, `moods` (the look by place, time and weather: `dawn.`, `evening.`, `night.`, `indoors.` and `rain.` followed by `brightness`, `contrast`, `saturation`, `warmth`, `vignette`, `bloom`, `ao`, `shadow`, `god_rays` or `dust` — the plain settings are the day out of doors), `character_bump` (the same on characters, much less on skin), `god_rays` (shafts of light from the sun), `bump` (relief on the map's surfaces, heights from the textures' brightness: 0 off, 1, 2 strong), `bump_depth`, `dust` (motes in the air and dust swept up by the game's own gusts: 0 off, 1, 2 a dusty day), `lantern_shadows` (the lanterns nearest you light the characters and cast their shadows), `weather` (`auto` — each part of each day may rain, `rain_chance` —, `rain`, `clear`) and `rain_amount` (rain: wet ground and puddles, splashes, dripping eaves, dry under roofs; moths round the lanterns on dry nights), `unbake` (0 the map's painted-in light … 1 relit by its sun, ambient and the real shadows — by day, out of doors), `unbake_exposure`, `lanterns`, `grade` = `1` / `0`; `shadow_strength`, `shadow_quality` (`low`, `high`, `ultra`); `ao_strength`, `ao_radius`; `lantern_strength`; `bloom` (0 = off), `bloom_threshold`; `contrast`, `saturation`, `warmth`, `vignette` |
+| `lighting` | Modern lighting in the world: the sun's shadows of characters, swords and things (in place of the dark blots under their feet), ambient occlusion, the lanterns of the night maps lighting the ground, bloom, a colour grade. | `shadows`, `map_shadows` (the map's own carts, eaves and trees cast too), `character_shadow` (how dark the sun's shadow falls on characters, 0.6; 1 = like the map), `character_ground_light` (characters and things take the light painted into the ground under them — darker in a shaded corner; 0 off … 1, the default), `ground_warp` (the ground's texture pushed about a little so that rows of paving and planks do not run dead straight into the distance; 0 off — the default, since where two ground textures meet their edges no longer line up —, 0.35 subtle, up to 3), `ao`, `moods` (the look by place, time and weather: `dawn.`, `evening.`, `night.`, `indoors.` and `rain.` followed by `brightness`, `contrast`, `saturation`, `warmth`, `vignette`, `bloom`, `ao`, `shadow`, `god_rays` or `dust` — the plain settings are the day out of doors), `character_bump` (the same on characters, much less on skin), `god_rays` (shafts of light from the sun), `bump` (relief on the map's surfaces, heights from the textures' brightness: 0 off, 1, 2 strong), `bump_depth`, `dust` (motes in the air and dust swept up by the game's own gusts: 0 off, 1, 2 a dusty day), `lantern_shadows` (the lanterns nearest you light the characters and cast their shadows), `weather` (`auto` — each part of each day may rain, `rain_chance` —, `rain`, `clear`) and `rain_amount` (rain: wet ground and puddles, splashes, dripping eaves, dry under roofs; moths round the lanterns on dry nights), `unbake` (0 the map's painted-in light … 1 relit by its sun, ambient and the real shadows — by day, out of doors), `unbake_exposure`, `lanterns`, `grade` = `1` / `0`; `shadow_strength`, `shadow_quality` (`low`, `high`, `ultra`); `ao_strength`, `ao_radius`; `lantern_strength`; `bloom` (0 = off), `bloom_threshold`; `contrast`, `saturation`, `warmth`, `vignette` |
 
 **F11** switches between the window and the whole screen at any time.
 
@@ -107,6 +107,29 @@ mods/mymod/files/Us/script/CTX/Opening.sx    an event script
 <file>` gets the original to start from; the comments in `src/` describe the formats.
 (Not replaceable this way: the music and voice streams in `BGM/` and the
 movies, which are read straight from the disc directory.)
+
+### Scripts
+
+The story, the shops and the opening are scripts in the game's own language,
+Sol (see `tools/SOL.md` in the package, `lib/sol/README.md` in the source).
+Every script on the disc comes with its source, and a mod can ship source
+too: put the `.sol` where the game looks for the script,
+
+```
+mods/mymod/files/Us/script/Shop/ootemon/yadoya.sol    the Otemon inn's script
+```
+
+and the game compiles it when it loads the script. A mod's `.sol` comes before
+the disc's compiled `.sx`. UTF-8 or UTF-16 both work. If it does not compile,
+the log says where (`[event] script/Shop/ootemon/yadoya.sol does not compile:
+Shop/ootemon/yadoya:302: an operand expected`).
+`#include "x"` reads `script/x`, from the mods first and then the disc.
+`tools/volume.py extract Us/script/Shop/ootemon/yadoya.sol -o yadoya.sol` gets
+an original to start from; it is UTF-16 and can be saved back as UTF-8.
+
+`tools/solc` compiles a script without the game, which checks it, and
+`tools/solrun` runs one, with the game's own functions (`Character`, `UI`,
+…) stubbed.
 
 ### Texture packs
 

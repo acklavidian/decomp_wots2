@@ -28,4 +28,7 @@ weather, F9 an HD texture pack off and on.  See mods\README.md.
 This build has been tested under Wine, not yet on a real Windows machine.
 Reports of how it runs are welcome.
 
+The folder "tools" holds solc and solrun, a compiler and a runner for the
+game's script language (tools/SOL.md; mods/README.md, "Scripts").
+
 Source and issues: https://github.com/acklavidian/decomp_wots2

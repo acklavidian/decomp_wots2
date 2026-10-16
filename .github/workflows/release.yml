@@ -34,6 +34,10 @@ jobs:
             cp mods/$m/mod.ini mods/$m/$m.so $d/mods/$m/
           done
           cp mods/README.md $d/mods/
+          mkdir $d/tools
+          cp build/lib/sol/solc build/lib/sol/solrun $d/tools/
+          strip $d/tools/*
+          cp lib/sol/README.md $d/tools/SOL.md
           cp packaging/README-linux.txt $d/README.txt
           tar czf $d.tar.gz $d
       - uses: actions/upload-artifact@v4
@@ -73,6 +77,10 @@ jobs:
           # The MinGW libraries the program and the mods use (SDL2, libarchive and its own).
           ldd $d/wots2.exe $d/mods/*/*.dll | awk '$3 ~ /^\/mingw64\// {print $3}' | sort -u | xargs -r cp -t $d/
           cp mods/README.md $d/mods/
+          mkdir $d/tools
+          cp build/lib/sol/solc.exe build/lib/sol/solrun.exe $d/tools/
+          strip $d/tools/*.exe
+          cp lib/sol/README.md $d/tools/SOL.md
           cp packaging/README-windows.txt $d/README.txt
           zip -r $d.zip $d
       - uses: actions/upload-artifact@v4

@@ -452,12 +452,16 @@ void Model::draw(const float* pose, sprites::Sheet* shared, const Lighting* ligh
                 index++;
             }
         }
-        if (fixed)
+        if (fixed) {
             fixedBuilt = true;
             fixedGeneration = texture_pack::generation();
+        }
     }
     for (const Batch& batch : batches) {
         if (batch.verts.empty())
+            continue;
+        static const bool noOverlay = getenv("WOTS2_NO_OVERLAY") != nullptr;     // (debug)
+        if (noOverlay && batch.overlay)
             continue;
         hal::gs::set_depth_bias(batch.bias);
         hal::gs::set_overlay(batch.overlay);

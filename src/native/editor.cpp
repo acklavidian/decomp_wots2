@@ -1321,7 +1321,7 @@ void lighting_panel() {
         ImGui::SliderFloat("Strength##bump", &l.bump, 0.0f, 3.0f, l.bump > 0.0f ? "%.2f" : "off");
         ImGui::SliderFloat("Depth", &l.bumpDepth, 0.5f, 12.0f);
         ImGui::SliderFloat("On characters##bump", &l.characterBump, 0.0f, 1.0f);
-        ImGui::SliderFloat("Ground warp (breaks up straight rows)", &l.groundWarp, 0.0f, 3.0f, l.groundWarp > 0.0f ? "%.2f" : "off");
+        ImGui::SliderFloat("Ground warp (misaligns texture seams)", &l.groundWarp, 0.0f, 3.0f, l.groundWarp > 0.0f ? "%.2f" : "off");
     }
     if (ImGui::CollapsingHeader("Un-bake the map's light", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Relit", &l.unbake, 0.0f, 1.0f, l.unbake > 0.0f ? "%.2f" : "baked");

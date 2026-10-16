@@ -63,6 +63,11 @@ with field of view, roll and depth of field; F12 saves the picture.
 
 **Sprint:** with your sword away, click the left stick (L3) while running.
 
+**Scripts from source:** the story, shops and opening are scripts in the game's own
+language, and every one is on the disc with its source. Edit a `.sol`, drop it in a
+mod, and the game compiles it when it loads it. `tools/solc` and `tools/solrun`
+compile and run scripts without the game ([`lib/sol`](lib/sol/README.md)).
+
 It runs lighter than it looks: everything out of view or beyond the fog is
 skipped before it reaches the graphics card.
 
@@ -150,9 +155,13 @@ themselves. Start it without an argument and it asks for the file in a window.
   that records each frame as a draw list — which is what lets the same frame
   be replayed wider, sharper, and in between.
 
-About 1,900 of the binary's ~4,600 functions are decompiled. Much of the rest
-is the script compiler, Sony's libraries and debug screens the game never
-shows.
+- **The script language is a library of its own.** [`lib/sol`](lib/sol/README.md)
+  is the game's script VM and its compiler, with no game code in it. The
+  compiler's output is identical, byte for byte, to all 164 compiled scripts
+  on the disc that come with source.
+
+About 2,000 of the binary's ~4,600 functions are decompiled. Much of the rest
+is Sony's libraries and debug screens the game never shows.
 
 ## Honest status
 

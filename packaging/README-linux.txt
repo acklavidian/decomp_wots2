@@ -29,4 +29,7 @@ adjust the graphics live (and save them), F6 switches the FPS unlock off and
 on, F3 the modern lighting, F7 is photo mode (F12 saves a picture), F8 the
 weather, F9 an HD texture pack off and on.  See mods/README.md.
 
+The folder "tools" holds solc and solrun, a compiler and a runner for the
+game's script language (tools/SOL.md; mods/README.md, "Scripts").
+
 Source and issues: https://github.com/acklavidian/decomp_wots2

@@ -1798,7 +1798,12 @@ int hle_project_extent(const float* world, float radius, s32* rect) {
     return 1;
 }
 
-void Light_SetMatrices(void*, const void*, const void*) {}
+// 0x166920: the lighting object's lights — four directions and four colours
+// (row 3 the ambient).  Its upload to VU1 (0x166910) is the native model
+// draw's business: the lights go to the native renderer here.
+void Light_SetMatrices(void*, const void* directions, const void* colours) {
+    model::set_scene_light(static_cast<const float (*)[4]>(colours), static_cast<const float (*)[4]>(directions));
+}
 void Light_Upload(void*, void*) {}
 
 // Sony libvu0 matrices: 4×4 floats, row-vector convention.

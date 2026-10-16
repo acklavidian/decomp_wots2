@@ -2130,7 +2130,50 @@ static void play(const Frame& f, const Frame* before, float t) {
     glUniform4f(s_uUvRect, -1e9f, -1e9f, 1e9f, 1e9f);
     glLineWidth(scaled ? (float)s_physH / (float)s_height : 1.0f);
     s_inTarget = false;
+    // The map's second group of meshes (blended, writing no depth: lattices,
+    // grass, decals) is drawn after the characters and things, still tested
+    // against depth — drawn where it came, a character behind a lattice was
+    // drawn later over it (user's report: the monk at Gen'an's).
+    struct Deferred { const Cmd* c; int bias, blend; float mvp[16]; float xscale; float fog[4], fogColor[3]; };
+    int curBlend = -1;
+    std::vector<Deferred> deferred;
+    int curBias = 0;
+    const auto flush = [&]() {
+        if (deferred.empty() || s_inTarget)
+            return;
+        float fog[4], fogColor[3];
+        memcpy(fog, s_fog, sizeof fog);
+        memcpy(fogColor, s_fogColor, sizeof fogColor);
+        for (const Deferred& d : deferred) {
+            memcpy(s_fog, d.fog, sizeof s_fog);              // (the map's fog, not whatever came after)
+            memcpy(s_fogColor, d.fogColor, sizeof s_fogColor);
+            state_3d(d.mvp, d.xscale, (int)hal::gs::View::Map);
+            if (d.blend >= 0)
+                apply_blend(d.blend);               // (as the map drew it)
+            bias(d.bias);
+            overlay(true);
+            const Vertex3* v = verts3(f, *d.c, before, t);
+            glBindTexture(GL_TEXTURE_2D, d.c->tex);
+            glUniform1i(s_uCutout, 0);
+            if (d.c->tex != s_white) {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            }
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)d.c->count * sizeof(Vertex3)), v, GL_STREAM_DRAW);
+            glDrawArrays(gl_prim(d.c->prim), 0, d.c->count);
+        }
+        deferred.clear();
+        if (curBlend >= 0)
+            apply_blend(curBlend);
+        memcpy(s_fog, fog, sizeof fog);
+        memcpy(s_fogColor, fogColor, sizeof fogColor);
+        overlay(false);
+        bias(0);
+        state_2d();
+    };
     for (const Cmd& c : f.cmds) {
+        if ((c.op == Op::Draw2D || c.op == Op::DrawDepth || c.op == Op::Post) && !s_inTarget)
+            flush();
         switch (c.op) {
         case Op::FrameBegin:
             glClearColor(c.f[0], c.f[1], c.f[2], c.f[3]);
@@ -2148,6 +2191,7 @@ static void play(const Frame& f, const Frame* before, float t) {
             glClear(GL_COLOR_BUFFER_BIT);
             break;
         case Op::Blend:
+            curBlend = c.i;
             apply_blend(c.i);
             break;
         case Op::AlphaRef:
@@ -2219,6 +2263,15 @@ static void play(const Frame& f, const Frame* before, float t) {
                 break;
             }
             s_drawn++;
+            static const bool noDefer = getenv("WOTS2_NO_DEFER") != nullptr;     // (debug: the old order)
+            if (s_overlayOn && s_playKind == (int)hal::gs::View::Map && !s_inTarget && !noDefer) {
+                Deferred d{&c, curBias, curBlend, {}, s_playXScale, {}, {}};
+                memcpy(d.mvp, s_playMvp, sizeof d.mvp);
+                memcpy(d.fog, s_fog, sizeof d.fog);
+                memcpy(d.fogColor, s_fogColor, sizeof d.fogColor);
+                deferred.push_back(d);
+                break;
+            }
             const Vertex3* v = verts3(f, c, before, t);
             glBindTexture(GL_TEXTURE_2D, c.tex);
             const bool cutout = !s_overlayOn && s_cutout.count(c.tex);
@@ -2244,6 +2297,7 @@ static void play(const Frame& f, const Frame* before, float t) {
             state_2d();
             break;
         case Op::Bias:
+            curBias = c.i;
             bias(c.i);
             break;
         case Op::Overlay:
@@ -2296,6 +2350,7 @@ static void play(const Frame& f, const Frame* before, float t) {
             break;
         }
     }
+    flush();
     state_2d();
 }
 

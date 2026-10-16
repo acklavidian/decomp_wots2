@@ -1,10 +1,10 @@
-// Debug aid for the event-script VM (src/game/script_vm.cpp):
+// Debug aid for the event-script VM (lib/sol/src/vm.cpp):
 //   WOTS2_RUN_SCRIPT=<name> ./build/wots2 extracted
 // loads script/<name>.sx, runs it for a while with every built-in the game
 // would supply replaced by a stub that reports itself once, and quits.  It
 // shows which built-ins a script needs and that the VM runs its code.
 
-#include "game/script_vm.h"
+#include "sol/vm.h"
 #include "native/archive.h"
 
 #include <cstdio>

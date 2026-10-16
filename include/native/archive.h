@@ -18,6 +18,8 @@ bool read(const std::string& path, std::vector<u8>& out);
 // first, by the full path the game asks for ("Us/menu/menutext.txt",
 // "Common/chara/list"), as written or in lower case.  Later ones come first.
 void add_overlay(const char* dir);
+// The same file from the overlays alone (false if no mod has it).
+bool read_overlay(const std::string& path, std::vector<u8>& out);
 // The path an overlay file takes the place of: with the language directory
 // for paths outside "Common/", and '/' for '\\'.
 std::string full_path(const std::string& path);

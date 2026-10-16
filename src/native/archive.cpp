@@ -225,11 +225,14 @@ std::string full_path(const std::string& path) {
     return full;
 }
 
-bool read(const std::string& path, std::vector<u8>& out) {
+static std::string with_prefix(const std::string& path) {
     std::string full = path;
     if (!starts_with_nocase(full, "Common/") && !starts_with_nocase(full, g_prefix.c_str()))
         full = g_prefix + full;
+    return full;
+}
 
+static bool read_overlays(const std::string& full, std::vector<u8>& out) {
     for (auto dir = g_overlays.rbegin(); dir != g_overlays.rend(); ++dir) {
         std::string name = full, low;
         for (char& c : name)
@@ -247,6 +250,17 @@ bool read(const std::string& path, std::vector<u8>& out) {
                     return true;
             }
     }
+    return false;
+}
+
+bool read_overlay(const std::string& path, std::vector<u8>& out) {
+    return read_overlays(with_prefix(path), out);
+}
+
+bool read(const std::string& path, std::vector<u8>& out) {
+    const std::string full = with_prefix(path);
+    if (read_overlays(full, out))
+        return true;
 
     u32 hash = name_hash(full);
     const Entry* e = nullptr;

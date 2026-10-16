@@ -1,5 +1,5 @@
 #pragma once
-#include "hal/ps2_types.h"
+#include <cstdint>
 
 #include <functional>
 #include <list>
@@ -8,14 +8,20 @@
 #include <string>
 #include <vector>
 
-// The event scripts' virtual machine ("Sol": the story, shops, the opening).
-// See "Event scripts" in the project notes.  Derived from the game's runtime at
-// 0x191B10–0x1BC3C0, op by op and built-in by built-in, but its objects live
-// on the host heap: nothing outside the VM reads their layout, and the
-// compiler half of the original (the disc has every script compiled) is not
-// needed.
+// The Sol virtual machine: Way of the Samurai 2's event-script language (the
+// story, shops, the opening).  Derived from the game's runtime at 0x191B10–
+// 0x1BC3C0, op by op and built-in by built-in, but its objects live on the
+// host heap: nothing outside the VM reads their layout.  The compiler that
+// makes its byte code is sol/compiler.h.  No dependency on the game: a host
+// registers its own built-ins with VM::def.
 
 namespace sol {
+
+using s16 = int16_t;
+using s32 = int32_t;
+using u8 = uint8_t;
+using u16 = uint16_t;
+using u32 = uint32_t;
 
 struct Obj;
 struct Frame;
@@ -118,6 +124,11 @@ struct VM {
     // does not have (`call`: it is about to be called) before the script
     // fails — lets scripts run while built-ins are still missing.
     std::function<Ref(const Ref& object, const std::string& name, bool call)> missing;
+    // The root's Rand(n) draws from this (the game: its own rand, 0x124B10).
+    // By default newlib's rand, which is what the game's is.
+    std::function<int()> random;
+    // Where the root's print(…) goes (one line, UTF-8).  By default stdout.
+    std::function<void(const std::string& line)> output;
 
     VM();
     Ref newInt(s32 v);
@@ -159,5 +170,7 @@ bool argNumber(const Frame& f, size_t i, float* out);      // an int or a float
 const std::u16string* argString(const Frame& f, size_t i);
 std::string narrow(const std::u16string& s);
 std::u16string widen(const std::string& s);
+std::string utf8(const std::u16string& s);
+std::u16string from_utf8(const std::string& s);
 
 }  // namespace sol

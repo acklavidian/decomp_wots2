@@ -1,6 +1,6 @@
 // The event (script) player — GameplayScene+0xD4, 0x18 bytes, 0x1E2E20–
 // 0x1E4DF0 — and the built-ins it gives the scripts.  See "Event scripts" in
-// the project notes; the VM is src/game/script_vm.cpp.
+// the project notes; the VM and the compiler are lib/sol.
 //
 // WORK IN PROGRESS.  Of the 234 built-ins (config/script_builtins.json) only
 // the ones below are decompiled; a script that calls another gets a stub that
@@ -18,7 +18,8 @@
 #include "game/map_db.h"
 #include "game/ai_moves.h"
 #include "game/world.h"
-#include "game/script_vm.h"
+#include "sol/compiler.h"
+#include "sol/vm.h"
 #include "native/archive.h"
 #include "native/guest.h"
 
@@ -33,6 +34,7 @@
 #include <string>
 #include <vector>
 
+extern "C" int Rand_Next();                                                    // 0x124B10
 extern "C" int Pad_SetVibration(void* mgr, int port, const void* pattern);   // 0x139FF0
 extern "C" void Camera_Reset(void* lighting);     // 0x1663E0 (point_lights.cpp)
 extern "C" void Lights_EnableMap(int on);          // 0x165C60
@@ -187,11 +189,31 @@ inline Player* P(EventPlayer* p) { return reinterpret_cast<Player*>(p); }
 
 // ── 0x1E4640 / 0x1E48E0: a script by name.  (The original falls back to
 // compiling the .sol; the disc has every .sx.) ─────────────────────────────
+// 0x1E4640: script/<name>.sx (0x1E48E0), else script/<name>.sol compiled
+// (0x1E4B20 reads it; the compiler is lib/sol).  Not in the original: a .sol
+// that a mod supplies comes before the disc's .sx, so a mod can ship source.
+// #include "x" reads script/x, as 0x1E4B20 does for a name with ".h".
+Ref CompileScript(const std::string& name, const std::vector<u8>& source) {
+    const auto include = [](const std::string& file, std::vector<u8>* bytes) {
+        return archive::read("script/" + file, *bytes);
+    };
+    const sol::CompileResult r = sol::compile(source, name, include);
+    if (!r.ok) {
+        printf("[event] script/%s.sol does not compile: %s\n", name.c_str(), r.error.c_str());
+        return nullptr;
+    }
+    printf("[event] compiled script/%s.sol\n", name.c_str());
+    return sVm->load(sol::make_sx(r.code), name);
+}
 Ref LoadScript(const std::string& name) {
     std::vector<u8> file;
-    if (!archive::read(("script/" + name + ".sx").c_str(), file))
-        return nullptr;
-    return sVm->load(file, name);
+    if (archive::read_overlay("script/" + name + ".sol", file))
+        return CompileScript(name, file);
+    if (archive::read("script/" + name + ".sx", file))
+        return sVm->load(file, name);
+    if (archive::read("script/" + name + ".sol", file))
+        return CompileScript(name, file);
+    return nullptr;
 }
 
 // ── 0x1EB470 / 0x1EB400 + 0x1EB6B0: a built-in is not started with fewer
@@ -528,7 +550,6 @@ void BuildMap(const Ref& o) {
                   sVm->newObject());
         return 1;
     });
-    // WaitLoading(): until the map is in (0x1E5890).
     // SetWindGain(strength): World+0xB0 (1 outdoors, 0.1 indoors by default;
     // 0x1E51A0, which otherwise only prints it).  Nothing decompiled so far
     // reads it: the wind the swing takes (CharaMgr+0x20) stays still.
@@ -537,26 +558,9 @@ void BuildMap(const Ref& o) {
             *reinterpret_cast<float*>(reinterpret_cast<u8*>(TheWorld(self)) + 0xB0) = FloatArg(f, 0);
         return 1;
     });
-    // (Native loading is done at once, but a real load never ends in the
-    // frame it is asked for — and the scene counts on that: a door's script
-    // starts a frame before the scene blacks the screen "while loading", so
-    // a script that got as far as its Wipe(0) at once would have it undone.)
-    // Nor does a real load end before the scene has put the player at the
-    // door (GameplayScene_RunField → World_PlaceAtStart, a few frames after
-    // the switch): a door's script that places the player itself (the home:
-    // seated, the camera on them) had it undone a frame later and looked at
-    // the bare wall by the door.  So indoors it also waits for that, at most
-    // a second.
-    RegWait(o, "WaitLoading", 0, nullptr, [](Frame& f) {
-        if (f.phase == 0) {
-            f.phase = 1;
-            return (int)sol::kYield;
-        }
-        if (!MapLoaded(sSelf))
-            return (int)sol::kYield;
-        if (*guest::ptr<s32>(0x2EE518u) == 1 && TheWorld(sSelf)->placePlayer != 0 && f.phase++ < 30)
-            return (int)sol::kYield;
-        return (int)sol::kEnd;
+    // WaitLoading(): until the map in use is in (0x1E5890).
+    RegWait(o, "WaitLoading", 0, nullptr, [](Frame&) {
+        return MapLoaded(sSelf) ? (int)sol::kEnd : (int)sol::kYield;
     });
 }
 
@@ -2842,6 +2846,8 @@ void EventPlayer_Reset(EventPlayer* mem, int scene) {
     self->scene = (u32)scene;
     sVm = std::make_unique<sol::VM>();
     sVm->missing = Missing;
+    sVm->random = [] { return Rand_Next(); };      // the game's one generator, shared with everything else
+    sVm->output = [](const std::string& line) { printf("[script] %s\n", line.c_str()); };
     const Ref root = sVm->root;
     for (const char* name : {"Map", "Camera", "Character", "Effect", "UI", "Sound", "EventFlag", "Battle", "Object"})
         root->attrs[name] = sVm->newObject();

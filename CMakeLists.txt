@@ -33,6 +33,9 @@ add_library(hal STATIC
 target_include_directories(hal PUBLIC include)
 target_link_libraries(hal PUBLIC SDL2::SDL2 OpenGL::GL)
 
+# ── The script language (VM + compiler), a library of its own ──────────────────
+add_subdirectory(lib/sol)
+
 # ── Decompiled code that runs natively ────────────────────────────────────────
 add_library(game STATIC
     src/engine/app.cpp
@@ -103,12 +106,12 @@ add_library(game STATIC
     src/game/sword_table.cpp
     src/game/movie_scenes.cpp
     src/game/chara_events.cpp
-    src/game/script_vm.cpp
     src/game/event_player.cpp
     src/game/collision_world.cpp
     src/game/pad_commands.cpp
     src/game/sword_holder.cpp
     src/game/map_routes.cpp
+    src/game/map_state.cpp
     src/game/task.cpp
     src/game/task_mgr.cpp
     src/game/task_actions.cpp
@@ -120,7 +123,7 @@ add_library(game STATIC
     src/game/chara_resources.cpp
 )
 target_include_directories(game PUBLIC include)
-target_link_libraries(game PRIVATE hal)
+target_link_libraries(game PRIVATE hal PUBLIC sol)
 
 # ── Decompiled code not wired in yet ──────────────────────────────────────────
 # Compiled so it keeps building, but not linked: its callees are not ported.
@@ -150,7 +153,7 @@ add_library(native STATIC
     src/native/enhancements.cpp
 )
 target_include_directories(native PUBLIC include)
-target_link_libraries(native PRIVATE hal)
+target_link_libraries(native PRIVATE hal sol)
 
 # ── Dear ImGui, for the level editor (F2 in the world) ───────────────────────
 include(FetchContent)

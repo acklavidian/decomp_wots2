@@ -3,8 +3,9 @@
 // the area map, the calendar and the map database are real; what they drive
 // is replaced here by the least that lets them run:
 //
-//   MapState     loads the map model of an area and draws it with the native
-//                model code, from a camera that follows the player
+//   MapLoader    reads a map's files and draws its model, sky and water with
+//                the native model code (the map state over it is decompiled:
+//                src/game/map_state.cpp)
 //   CharaMgr     (in hle.cpp) one character; here: the d-pad walks the player
 //                over the map's collision grid (decompiled; blocked cells stop
 //                it; exit zones, doors and hint spots come from its cell types),
@@ -20,6 +21,7 @@
 #include "game/ai_moves.h"
 #include "game/map_collision.h"
 #include "game/map_db.h"
+#include "game/map_state.h"
 #include "game/chara_resources.h"
 #include "game/player_data.h"
 #include "game/spawner.h"
@@ -87,7 +89,7 @@ void mul(const float* a, const float* b, float* out) {      // out = a × b, row
     memcpy(out, r, sizeof(r));
 }
 
-// The loaded maps, by MapState object.
+// The loaded maps, by MapLoader object.
 struct NativeMap {
     model::Model model;
     bool loaded = false;
@@ -149,183 +151,147 @@ const MapInfo* map_info(int index) {
     return nullptr;
 }
 
-void load_map(void* state, int index) {
-    NativeMap* m = g_maps[state];
-    if (!m)
-        return;
-    m->model.release();
-    m->model = model::Model();
-    m->loaded = false;
-    m->index = index;
-    const MapInfo* info = map_info(index);
-    m->modelPath = info && info->model ? guest::ptr<const char>(info->model) : "";
-    m->collisionPath = info && info->collision ? guest::ptr<const char>(info->collision) : "";
-    std::vector<u8> file;
-    if (info && archive::read(guest::ptr<const char>(info->model), file) && m->model.load(file)) {
-        m->loaded = true;
-        m->clearColor = 0x80000000u | info->color[0] | (u32)info->color[1] << 8 | (u32)info->color[2] << 16;
-        memcpy(m->fog, info->fog, sizeof m->fog);
-        printf("[world] map %d: %s\n", index, guest::ptr<const char>(info->model));
-        m->groundBuilt = false;
-        m->ground.clear();
-        m->groundCount.clear();
-        m->water.release();
-        m->hasWater = false;
-        std::vector<u8> water;
-        if (info->water && archive::read(guest::ptr<const char>(info->water), water) && m->water.load(water) &&
-            !m->water.textures.empty()) {
-            m->hasWater = true;
-            memcpy(&m->waterHeight, &info->waterParam, 4);
-            printf("[world] water: %s (%zu frames) at %.2f\n", guest::ptr<const char>(info->water),
-                   m->water.textures.size(), m->waterHeight);
-        }
-        m->sky.release();
-        m->hasSky = false;
-        std::vector<u8> sky;
-        if (info->sky && archive::read(guest::ptr<const char>(info->sky), sky) && m->sky.load(sky)) {
-            m->hasSky = true;
-            memcpy(&m->skyScale, &info->skyParam, 4);
-            if (!(m->skyScale > 0.0f))
-                m->skyScale = 1.0f;
-            printf("[world] sky: %s (scale %.2f, %zu bones)\n", guest::ptr<const char>(info->sky), m->skyScale,
-                   m->sky.bones.size());
-        }
-        model::set_scene_light(info->light, info->lightColor);
-        if (getenv("WOTS2_DUMP_LIGHT"))
-            printf("[light] fog %.3f %.3f %.3f %.3f  far %.1f  clear %d %d %d\n", info->fog[0], info->fog[1], info->fog[2],
-                   info->fog[3], info->_18, info->color[0], info->color[1], info->color[2]);
-        if (getenv("WOTS2_DUMP_LIGHT"))
-            for (int i = 0; i < 4; i++)
-                printf("[light] %d dir %.2f %.2f %.2f %.2f  colour %.2f %.2f %.2f %.2f\n", i, info->light[i][0], info->light[i][1],
-                       info->light[i][2], info->light[i][3], info->lightColor[i][0], info->lightColor[i][1],
-                       info->lightColor[i][2], info->lightColor[i][3]);
-    } else {
-        fprintf(stderr, "[world] map %d could not be loaded\n", index);
+// Which map a model file is (for the level editor's report).
+int map_of_model(const std::string& path) {
+    MapDb* db = MapDb_Get();
+    MapDb_Load(db, 0);
+    int i = 0;
+    for (GuestListNode* n = GuestList_Begin(&db->maps); n != GuestList_End(&db->maps); n = GuestList_Next(n), i++) {
+        const MapInfo* info = guest::ptr<MapInfo>(n->value);
+        if (info->model && path == guest::ptr<const char>(info->model))
+            return i;
     }
-    // The collision file is read by the decompiled code.
-    MapCollision* holder = guest::ptr<MapCollision>(m->collision);
-    if (holder->collision)
-        Collision_Dtor(guest::ptr<Collision>(holder->collision), 1);
-    holder->collision = 0;
-    if (m->collisionFile)
-        guest::free(guest::ptr(m->collisionFile));
-    m->collisionFile = 0;
-    if (info && info->collision && archive::read(guest::ptr<const char>(info->collision), file)) {
-        void* copy = guest::alloc((u32)file.size());
-        memcpy(copy, file.data(), file.size());
-        m->collisionFile = guest::addr(copy);
-        m->collisionSize = (u32)file.size();
-        MapCollision_SetFile(holder, static_cast<const s32*>(copy));
-    }
-    g_currentMap = m;
-    // Which route points can see which, and the ways between them (the real
-    // loader does this as its last step).  This stand-in keeps one map, so
-    // the tables for outdoors and indoors are both made from it.
-    //
-    // The tables are made from the route points of the player's area
-    // (PlayerData+0x103).  When a script loads a map of another area
-    // (World_GoToMap) the area is only set after the load is begun — the real
-    // loader is still reading then and makes the tables later, with the new
-    // area; this one is done at once, so it must look the map's area up
-    // itself (the world's table at 0x2D8F00), or people on that map would be
-    // given the ways of the area the player came from and find none.
-    u8* pd = *guest::ptr<u32>(0x2EE688u) ? guest::ptr<u8>(*guest::ptr<u32>(0x2EE688u)) : nullptr;
-    const u8 savedArea = pd ? pd[0x103] : 0;
-    if (pd != nullptr) {
-        const s16* areaMaps = guest::ptr<const s16>(0x2D8F00u);
-        for (int area = 0; area < 11; area++)
-            for (const s16* entry = areaMaps + area * 0x14; *entry != -1; entry++)
-                if (*entry == index)
-                    pd[0x103] = (u8)area;
-    }
-    s32* indoors = guest::ptr<s32>(0x2EE518u);
-    const s32 saved = *indoors;
-    for (s32 i = 0; i < 2; i++) {
-        *indoors = i;
-        MapState_LinkRoutePoints(state);
-        MapState_BuildRouteTable(state);
-    }
-    *indoors = saved;
-    if (pd != nullptr)
-        pd[0x103] = savedArea;
+    return -1;
+}
+
+NativeMap* native_of(MapLoader* loader) {
+    auto it = g_maps.find(loader);
+    return it == g_maps.end() ? nullptr : it->second;
 }
 
 }  // namespace
 
 extern "C" {
 
-// ══ Map state ═════════════════════════════════════════════════════════════
-void* MapState_Ctor(void* mem) {
-    note_once("world: the map is loaded and drawn by native code (the map state is a stand-in)");
-    memset(mem, 0, 0x80);
-    static_cast<s32*>(mem)[3] = -1;                 // no load pending (outdoors / indoors)
-    static_cast<s32*>(mem)[4] = -1;
-    // As the original's (0x14C3C0): a new map state starts out of doors.
-    // Without it, a world made while the flag was still set — after resting
-    // in a house, say, which leaves by way of the area map — never ended its
-    // walk-in (World_IntroDone answers 0 indoors) and kept the bars for good.
-    *guest::ptr<s32>(0x2EE518u) = 0;
-    RouteTables_Init(reinterpret_cast<RouteTables*>(static_cast<u8*>(mem) + 0x20));
+// ══ The map loader (0x149520–0x14AF50), native ════════════════════════════
+// The map state that drives it is decompiled (src/game/map_state.cpp).  Here
+// a file is read whole when it is opened, so a read is always over by the
+// time MapLoader_Finish asks; the map state still takes its one step a frame.
+// The model is kept as the native model code's, the sky and the water too.
+MapLoader* MapLoader_Ctor(MapLoader* self) {
+    note_once("world: the map loader reads and draws natively (the map state over it is decompiled)");
+    memset(self, 0, sizeof(MapLoader));
+    void* mem = guest::alloc(sizeof(MapCollision));
+    self->collision = guest::addr(MapCollision_Ctor(static_cast<MapCollision*>(mem)));
     NativeMap* m = new NativeMap;
-    m->collision = guest::addr(MapCollision_Ctor(static_cast<MapCollision*>(guest::alloc(sizeof(MapCollision)))));
-    g_maps[mem] = m;
-    return mem;
+    m->collision = self->collision;
+    g_maps[self] = m;
+    return self;
 }
-extern "C" void hle_light_restore();
-void MapState_Dtor(void* self, int flag) {
-    hle_light_restore();        // (the death scene put the lights out: the next screen gets them back)
-    auto it = g_maps.find(self);
-    if (it != g_maps.end()) {
-        if (g_currentMap == it->second)
+MapLoader* MapLoader_Dtor(MapLoader* self, s16 flag) {
+    if (self == nullptr)
+        return self;
+    if (NativeMap* m = native_of(self)) {
+        if (g_currentMap == m)
             g_currentMap = nullptr;
-        it->second->model.release();
-        it->second->sky.release();
-        it->second->water.release();
-        MapCollision_Dtor(guest::ptr<MapCollision>(it->second->collision), 1);
-        if (it->second->collisionFile)
-            guest::free(guest::ptr(it->second->collisionFile));
-        delete it->second;
-        g_maps.erase(it);
+        m->model.release();
+        m->sky.release();
+        m->water.release();
+        delete m;
+        g_maps.erase(self);
     }
+    if (self->collisionFile != 0)
+        guest::free(guest::ptr(self->collisionFile));
+    self->collisionFile = 0;
+    if (self->collision != 0)
+        MapCollision_Dtor(guest::ptr<MapCollision>(self->collision), 1);
+    self->collision = 0;
     free_object(self, flag);
+    return self;
 }
-// This stand-in keeps one map, so a door's room replaces the street only once
-// the indoors flag says the room is the one in use.  Swapped at once, the
-// street vanished while the screen was still wiping to black: the room's fog
-// colour round the street's people (GitHub issue #3).
-static void settle(void* self) {
-    NativeMap* m = g_maps[self];
-    if (m && m->pending != -1 && *guest::ptr<s32>(0x2EE518u) == 1) {
-        const int map = m->pending;
-        m->pending = -1;
-        load_map(self, map);
+int MapLoader_Open(MapLoader* self, const char* path, int kind) {
+    NativeMap* m = native_of(self);
+    if (m == nullptr || path == nullptr || path[0] == 0)
+        return 0;
+    std::vector<u8> file;
+    if (!archive::read(path, file))
+        return 0;
+    switch (kind) {
+    case 0:                                         // the sky: a model of its own
+        m->sky.release();
+        m->hasSky = m->sky.load(file);
+        if (m->hasSky)
+            printf("[world] sky: %s (scale %.2f, %zu bones)\n", path, m->skyScale, m->sky.bones.size());
+        break;
+    case 1:                                         // the water: thirty frames of a texture
+        m->water.release();
+        m->hasWater = m->water.load(file) && !m->water.textures.empty();
+        if (m->hasWater)
+            printf("[world] water: %s (%zu frames) at %.2f\n", path, m->water.textures.size(), m->waterHeight);
+        break;
+    case 2:
+    case 6:                                         // the model
+        m->model.release();
+        m->model = model::Model();
+        m->loaded = m->model.load(file);
+        if (!m->loaded) {
+            fprintf(stderr, "[world] map %s could not be loaded\n", path);
+            return 0;
+        }
+        m->modelPath = path;
+        m->index = map_of_model(path);
+        m->groundBuilt = false;
+        m->ground.clear();
+        m->groundCount.clear();
+        printf("[world] map %d: %s\n", m->index, path);
+        break;
+    case 3: {                                       // the collision file, read by the decompiled code
+        if (self->collisionFile != 0)
+            guest::free(guest::ptr(self->collisionFile));
+        void* copy = guest::alloc((u32)file.size());
+        memcpy(copy, file.data(), file.size());
+        self->collisionFile = guest::addr(copy);
+        m->collisionPath = path;
+        break;
+    }
+    default:
+        return 0;
+    }
+    return 1;
+}
+int MapLoader_Finish(MapLoader* self, int, int kind) {
+    if (kind == 3)
+        MapCollision_SetFile(guest::ptr<MapCollision>(self->collision), guest::ptr<const s32>(self->collisionFile));
+    else if (kind == 2)
+        self->ready = 1;
+    return 1;
+}
+void MapLoader_BuildModel(MapLoader* self, u32) {
+    if (NativeMap* m = native_of(self))
+        self->ready = m->loaded ? 1 : 0;
+}
+void MapLoader_SetCollision(MapLoader* self, u32 file) {
+    MapCollision_SetFile(guest::ptr<MapCollision>(self->collision), guest::ptr<const s32>(file));
+    if (NativeMap* m = native_of(self))
+        g_currentMap = m;
+}
+void MapLoader_SetSkyParam(s32 param, MapLoader* self) {
+    if (NativeMap* m = native_of(self)) {
+        memcpy(&m->skyScale, &param, 4);
+        if (!(m->skyScale > 0.0f))
+            m->skyScale = 1.0f;
     }
 }
-static void load_now(void* self, int map) {
-    if (NativeMap* m = g_maps[self])
-        m->pending = -1;
-    load_map(self, map);
+void MapLoader_SetWaterHeight(s32 height, MapLoader* self) {
+    if (NativeMap* m = native_of(self))
+        memcpy(&m->waterHeight, &height, 4);
 }
-void MapState_Load(void* self, int map)     { load_now(self, map); }
-void MapState_SetCurrent(void*, int)        {}
-int  MapState_IsLoaded(void* self)          { settle(self); return 1; }
-void MapState_LoadNext(void* self, int map) {
-    NativeMap* m = g_maps[self];
-    if (m && *guest::ptr<s32>(0x2EE518u) == 0) {
-        m->pending = map;
-        return;
-    }
-    load_now(self, map);
-}
-void MapState_SetNext(void*, int)           {}
-void MapState_Return(void* self, int map)   { load_now(self, map); }
-void MapState_BeginDraw(void*, void*)       {}
-void MapState_EndDraw(void*)                {}
-u32  MapState_GetMap(void* self) {
-    settle(self);
-    NativeMap* m = g_maps[self];
-    return m ? m->collision : 0;
-}
+void MapLoader_SetFrustum(MapLoader*) {}            // (culling is the renderer's: hal/gs.cpp)
+// The sky and the water are drawn inside MapLoader_Draw, in the same order.
+void MapLoader_DrawSky(MapLoader*) {}
+void MapLoader_DrawWater(MapLoader*) {}
+// 0x165CA0: the point lights to VU1.  The native renderer gathers them itself (Lights_Gather).
+void Light_UploadPoints(void*, void*) {}
 
 extern "C" int Lights_Gather(float* out, int max);     // point_lights.cpp
 // The world is drawn (World_Draw): the modern lighting's last part.
@@ -520,11 +486,14 @@ static void make_view(void* stage, float* view, float* proj) {
     g_view.frame = hal::gs::frame_count();
 }
 
-void MapState_Draw(void* self, const float*, void* stage, void*) {
-    settle(self);
-    NativeMap* m = g_maps[self];
+void MapLoader_Draw(MapLoader* self, const float*, void* stage, void*) {
+    NativeMap* m = native_of(self);
     if (!m)
         return;
+    g_currentMap = m;
+    // The fog and the clear colour are what MapState_Return made the screen's.
+    m->clearColor = 0x80000000u | (*guest::ptr<u32>(0x2EE6A8u) & 0xFFFFFFu);
+    memcpy(m->fog, guest::ptr<float>(0x2D9460u), sizeof m->fog);
     hal::gs::clear(m->clearColor);
     // The map's fog (MapInfo+0xB0 = what the game hands GsDevice_SetFogParams),
     // toward the clear colour.  WOTS2_NO_FOG=1 (debug) switches it off.

@@ -1,15 +1,12 @@
-// The event scripts' virtual machine — see include/game/script_vm.h and
-// "Event scripts" in the project notes.  Each part names the functions of the
+// The Sol virtual machine — see sol/vm.h.  Each part names the functions of the
 // original it follows.
 
-#include "game/script_vm.h"
+#include "sol/vm.h"
 
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
-
-extern "C" int Rand_Next();                 // 0x1200F0
 
 namespace sol {
 
@@ -45,6 +42,33 @@ std::u16string widen(const std::string& s) {
     std::u16string out;
     for (unsigned char c : s)
         out.push_back(c);
+    return out;
+}
+std::string utf8(const std::u16string& s) {
+    std::string out;
+    for (char16_t c : s) {
+        if (c < 0x80) {
+            out += (char)c;
+        } else if (c < 0x800) {
+            out += (char)(0xC0 | c >> 6);
+            out += (char)(0x80 | (c & 0x3F));
+        } else {
+            out += (char)(0xE0 | c >> 12);
+            out += (char)(0x80 | (c >> 6 & 0x3F));
+            out += (char)(0x80 | (c & 0x3F));
+        }
+    }
+    return out;
+}
+std::u16string from_utf8(const std::string& s) {
+    std::u16string out;
+    for (size_t i = 0; i < s.size();) {
+        uint32_t c = (unsigned char)s[i++];
+        int more = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+        if (more) c &= 0x3Fu >> more;
+        while (more-- > 0 && i < s.size()) c = c << 6 | ((unsigned char)s[i++] & 0x3F);
+        out += c > 0xFFFF ? u'?' : (char16_t)c;
+    }
     return out;
 }
 
@@ -657,6 +681,11 @@ static std::u16string toString(VM& vm, const Ref& v) {
 }
 
 VM::VM() {
+    // newlib's rand (the game's, 0x124B10): a 64-bit LCG, the top 31 bits.
+    random = [state = (uint64_t)1]() mutable {
+        state = state * 6364136223846793005ULL + 1;
+        return (int)((state >> 32) & 0x7FFFFFFF);
+    };
     // ── Every object: SetValue(name, value), at(name)  (0x197F70) ──────────
     protoObject = std::make_shared<Obj>();
     def(protoObject, "SetValue", [](Frame& f) {         // 0x198EC0
@@ -808,7 +837,9 @@ VM::VM() {
         std::u16string text;
         for (size_t i = 0; i < argCount(f); i++)
             text += toString(*f.thread->vm, arg(f, i));
-        printf("[script] %s\n", narrow(text).c_str());
+        VM& vm = *f.thread->vm;
+        if (vm.output) vm.output(utf8(text));
+        else printf("%s\n", utf8(text).c_str());
         return 0;
     });
     root->attrs["__if"] = std::make_shared<If>();
@@ -821,7 +852,7 @@ VM::VM() {
             argInt(f, 0, &n);
         if (n < 1)
             n = 1;
-        f.thread->result = f.thread->vm->newInt(Rand_Next() % n);
+        f.thread->result = f.thread->vm->newInt(f.thread->vm->random() % n);
         return 0;
     });
     def(root, "StartThread", [](Frame& f) {             // 0x19E1E0: (receiver, function, arguments)

@@ -791,8 +791,8 @@
   "0x144f50": "CharaMgr_ReloadStep",
   "0x24cf10": "CharaSetup_LoadCamera",
   "0x145830": "CharaMgr_Draw",
-  "0x166920": "Camera_SetMatrices",
-  "0x166910": "Camera_Upload",
+  "0x166920": "Light_SetMatrices",
+  "0x166910": "Light_Upload",
   "0x1683d0": "ScreenLayout_GetGroupCenter",
   "0x168470": "ScreenLayout_GetGroupRect",
   "0x1682f0": "ScreenLayout_GetGroupOrigin",
@@ -2840,5 +2840,6 @@
   "0x2615a0": "McText_Slide",
   "0x261770": "McText_Ctor",
   "0x265bf0": "McData_CopySlot",
-  "0x265b50": "McData_ClearSlot"
+  "0x265b50": "McData_ClearSlot",
+  "0x165ca0": "Light_UploadPoints"
 }
